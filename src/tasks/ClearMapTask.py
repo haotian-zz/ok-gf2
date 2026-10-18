@@ -101,8 +101,7 @@ class ClearMapTask(BaseGfTask):
             processors = [None, self.make_hsv_isolator(hR.WHITE), self.make_hsv_isolator(hR.WHITE_GRAY)]
 
         anchor = None  # 最近一次判定为未解锁的关卡名，下一步只往它左边找前置
-        drags = 0  # 为了找前置关卡往右拖动地图的次数
-        max_drags = 3
+        last_scroll_leftmost = None  # 上次为了往左看而点击的最左卡片名，用来判断视野有没有真的移动
 
         while True:
             self.sleep(1)
@@ -134,13 +133,18 @@ class ClearMapTask(BaseGfTask):
 
             candidate = pick_candidate(ordered, done, locked, anchor)
             if candidate is None:
-                if anchor and drags < max_drags:
-                    # 前置关卡不在屏幕内：往右拖动地图，把左边更早的关卡拖进来
-                    drags += 1
-                    self.log_info(f"{anchor} 的前置关卡不在屏幕内, 向左查看 ({drags}/{max_drags})", notify=False)
-                    self.swipe_relative(0.3, 0.5, 0.75, 0.5, duration=0.5)
-                    self.sleep(1)
-                    continue
+                if anchor:
+                    # 前置关卡不在屏幕内。地图拖动对 PostMessage 无效，但点任意卡片后游戏会把它
+                    # 滚到屏幕左中位置，所以点最左边那张卡就能把视野往左挪。
+                    leftmost, leftmost_group = min(ordered, key=lambda item: item[0].x)
+                    leftmost_name = next(iter(leftmost_group))
+                    if leftmost_name != last_scroll_leftmost and leftmost.x < self.width * 0.45:
+                        last_scroll_leftmost = leftmost_name
+                        self.log_info(f"{anchor} 的前置关卡不在屏幕内, 点击 {leftmost_name} 把视野往左挪", notify=False)
+                        self.click(leftmost, after_sleep=1.5)
+                        self.close_map_panel()
+                        continue
+                    raise Exception(f"{anchor} 未解锁且屏幕左侧没有可推的前置关卡, 请手动把视野移到前置关卡再启动")
                 if locked:
                     raise Exception(f"剩余关卡都未解锁({sorted(locked)}), 请手动把视野移到前置关卡再启动")
                 self.log_info(f"推图完成, 共{count}个!", notify=True)
@@ -148,9 +152,16 @@ class ClearMapTask(BaseGfTask):
             current_map, name_group = candidate
             self.click(current_map, after_sleep=1)
 
-            boxes = self.wait_ocr(
-                box="right", match=["特殊奖励", "观看", "挑战", "完成前置关卡解锁"], time_out=3, log=True
+            boxes = (
+                self.wait_ocr(box="right", match=["特殊奖励", "观看", "挑战", "完成前置关卡解锁"], time_out=3, log=True)
+                or []
             )
+            # wait_ocr 的 match 会经过 OCR 纠错表展开（現看/観看 → 观看），
+            # 但 find_boxes 是精确比较，这里要用同样展开过的匹配列表
+            locked_hint = self.find_boxes(boxes, match=self.fix_match_regex(["完成前置关卡解锁"]))
+            special_reward = self.find_boxes(boxes, match=self.fix_match_regex(["特殊奖励"]))
+            challenge = self.find_boxes(boxes, match=self.fix_match_regex(["挑战"]))
+            watch = self.find_boxes(boxes, match=self.fix_match_regex(["观看"]))
             self.debug_shot(f"panel_{current_map.name}", boxes)
             if not boxes:
                 # 面板没弹出或没识别到，跳过这张避免反复点
@@ -159,21 +170,21 @@ class ClearMapTask(BaseGfTask):
                 self.close_map_panel()
                 continue
 
-            if self.find_boxes(boxes, match="完成前置关卡解锁"):
+            if locked_hint:
                 self.log_info(f"{current_map.name} 未解锁, 往左找前置关卡", notify=False)
                 locked.update(name_group)
                 anchor = current_map.name
                 self.close_map_panel()
                 continue
 
-            if not self.find_boxes(boxes, match="特殊奖励"):
+            if not special_reward:
                 # 没有首通特殊奖励 = 已通关
                 self.log_info(f"{current_map.name} 已通关, 跳过", notify=False)
                 done.update(name_group)
                 self.close_map_panel()
                 continue
 
-            action = self.find_boxes(boxes, match=["挑战", "观看"])
+            action = challenge or watch
             if not action:
                 self.log_info(f"{current_map.name} 面板没有挑战/观看按钮, 视为未解锁", notify=False)
                 locked.update(name_group)
@@ -184,7 +195,7 @@ class ClearMapTask(BaseGfTask):
             # 正常处理挑战或观看
             self.click(action, after_sleep=2)
             count += 1
-            if action[0].name == "挑战":
+            if challenge:
                 self.auto_battle(
                     end_match=map_re,
                     has_dialog=True,
@@ -196,7 +207,7 @@ class ClearMapTask(BaseGfTask):
             # 推过一关后，之前未解锁的关卡可能已经解锁，重新从左往右判定
             locked.clear()
             anchor = None
-            drags = 0
+            last_scroll_leftmost = None
             self.close_map_panel()
 
     def close_map_panel(self):
