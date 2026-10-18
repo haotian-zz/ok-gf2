@@ -5,6 +5,7 @@ import time
 from ok import BaseTask, Box, Logger, find_boxes_by_name
 
 from src.core.base_mixin.runtime_mixin import RuntimeMixin
+from src.core.debug_shot import save_debug_shot
 from src.data.FeatureList import FeatureList as fL
 from src.image.frame_processs import isolate_by_hsv_ranges
 from src.image.hsv_config import HSVRange as hR
@@ -76,6 +77,20 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.account_config_whitelist = set(getattr(self, "account_config_whitelist", ()))
         self.account_config_defaults = dict(getattr(self, "account_config_defaults", {}))
 
+    def debug_shot(self, tag, boxes=None):
+        """
+        保存调试截图到 screenshots/<任务名>/<日期>/，仅在任务配置「调试截图」开启时生效。
+        :param tag: 文件名标签，说明当前阶段
+        :param boxes: 需要画框标注的 Box 列表，可选
+        """
+        if not self.config.get("调试截图", False):
+            return None
+        try:
+            return save_debug_shot(self.frame, self.name, tag, boxes)
+        except Exception as e:
+            self.log_debug(f"调试截图失败: {e}")
+            return None
+
     def isolate_by_hsv_ranges(self, frame, ranges, invert=True, kernel_size=2):
         """
         :param frame: 输入图像（BGR）
@@ -138,6 +153,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                     self.click_relative(0.95, 0.04)
                 self.sleep(2)
             self.next_frame()
+        self.debug_shot("skip_dialogs_timeout")
         if raise_if_not_found:
             raise Exception("跳过剧情超时!")
 
@@ -178,6 +194,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             has_dialog=has_dialog,
             raise_if_not_found=False,
         )
+        self.debug_shot("battle_entry", result)
         if result and result[0].name == "继续前进":
             self.log_info("开局检测到继续前进，点击后开启新一轮自动战斗", notify=True)
             self.click_box(result, after_sleep=2)
@@ -204,6 +221,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 time_out=45,
                 raise_if_not_found=False,
             )
+            self.debug_shot("after_battle_start", start_result)
             if start_result and "继续前进" in start_result[0].name:
                 self.log_info("开局后检测到继续前进，点击后开启新一轮自动战斗", notify=True)
                 self.click_box(start_result, after_sleep=2)
@@ -258,6 +276,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                             self.click_relative(0.85, 0.05, after_sleep=1)
                         else:
                             self.click_relative(0.88, 0.04, after_sleep=1)
+                        self.debug_shot("after_click_auto")
 
         clicked_continue = False
         while results := self.skip_dialogs(
@@ -283,6 +302,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.click_box(results, after_sleep=2)
             if results[0].name not in pop_ups:
                 break
+        self.debug_shot("battle_result", results)
         if not results:
             raise Exception("自动战斗异常")
         if results[0].name == "任务失败":
