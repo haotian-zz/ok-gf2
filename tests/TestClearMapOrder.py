@@ -14,7 +14,7 @@ from ok import Box
 
 from src.core.debug_shot import save_debug_shot
 from src.data.FeatureList import FeatureList as fL
-from src.tasks.ClearMapTask import is_branch_group, merge_maps, order_maps
+from src.tasks.ClearMapTask import is_branch_group, merge_maps, order_maps, pick_candidate
 
 
 class TestOrderMaps(unittest.TestCase):
@@ -54,6 +54,23 @@ class TestOrderMaps(unittest.TestCase):
         ordered = order_maps(merged, groups)
         self.assertEqual([m.name for m, _ in ordered], ["2-3", "2-5"])
         self.assertEqual(ordered[1][1], {"2-5", "2-5*"})
+
+
+class TestPickCandidate(unittest.TestCase):
+    def test_skips_done_and_locked(self):
+        ordered = [
+            (Box(100, 0, 1, 1, name="SL-3-1"), {"SL-3-1"}),
+            (Box(400, 0, 1, 1, name="3-1"), {"3-1"}),
+            (Box(700, 0, 1, 1, name="SL-3-2"), {"SL-3-2"}),
+        ]
+        self.assertEqual(pick_candidate(ordered, set(), set())[0].name, "SL-3-1")
+        self.assertEqual(pick_candidate(ordered, {"SL-3-1"}, set())[0].name, "3-1")
+        self.assertEqual(pick_candidate(ordered, {"SL-3-1"}, {"3-1"})[0].name, "SL-3-2")
+        self.assertIsNone(pick_candidate(ordered, {"SL-3-1", "SL-3-2"}, {"3-1"}))
+
+    def test_group_partial_overlap_counts(self):
+        ordered = [(Box(100, 0, 1, 1, name="2-5"), {"2-5", "2-5*"})]
+        self.assertIsNone(pick_candidate(ordered, {"2-5*"}, set()))
 
 
 class TestDebugShot(unittest.TestCase):
