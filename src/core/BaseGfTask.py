@@ -15,6 +15,8 @@ pop_ups = ["点击空白处关闭", "点击屏幕任意位置继续", "点击任
 number_re = re.compile(r"^\d+$")
 stamina_re = re.compile(r"^\d+/\d+")
 map_re = re.compile(r"^.{0,2}\s*-?\s*\d{1,2}\s*-\s*\d{1,2}\s*\*?$")
+# 战斗中界面的标志：右下角「行动结束」或左上角「01/12 回合」计数
+battle_ui_re = re.compile(r"行动结束|\d{1,2}\s*/\s*\d{1,2}\s*回合")
 
 
 def parse_time_option(option: str) -> list[float]:
@@ -131,12 +133,21 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 self.back()
                 self.sleep(1)
             else:
-                if has_dialog and not self._is_loading_frame(boxes):
+                # 战斗中界面右上角是加速/跳过回合图标，不是剧情跳过，不能点
+                if has_dialog and not self._is_loading_frame(boxes) and not self._is_battle_frame(boxes):
                     self.click_relative(0.95, 0.04)
                 self.sleep(2)
             self.next_frame()
         if raise_if_not_found:
             raise Exception("跳过剧情超时!")
+
+    def _is_battle_frame(self, boxes):
+        """
+        判断当前帧是否为战斗中界面（存在「行动结束」或回合计数）。
+        :param boxes: OCR 识别结果
+        :return: True 如果处于战斗中，否则 False
+        """
+        return bool(self.find_boxes(boxes, match=battle_ui_re))
 
     def _is_loading_frame(self, boxes):
         """
@@ -238,7 +249,11 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                         self.wait_click_ocr(match="取消", after_sleep=2)
                 if start_result and need_click_auto:
                     self.sleep(0.5)
-                    while self.ocr(match="行动结束", box=self.box.bottom_right):
+                    # 最多尝试 5 次，避免自动按钮被反复切换
+                    for _ in range(5):
+                        if not self.ocr(match="行动结束", box=self.box.bottom_right):
+                            break
+                        self.log_info("检测到行动结束，点击右上角自动战斗按钮", notify=False)
                         if self.is_adb():
                             self.click_relative(0.85, 0.05, after_sleep=1)
                         else:

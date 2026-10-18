@@ -19,6 +19,7 @@ class ClearMapTask(BaseGfTask):
                 "普通OCR": True,
                 "除杂色OCR1": True,
                 "除杂色OCR2": True,
+                "战斗内点击自动": True,
             }
         )
         self.config_description.update(
@@ -34,6 +35,10 @@ class ClearMapTask(BaseGfTask):
                 "除杂色OCR2": (
                     "除杂色OCR2（宽松白灰色）：同时保留白色与浅灰色区域后再识别\n"
                     "适用场景：关卡卡片文字为白色或浅灰色，或普通OCR/除杂色OCR1均无法识别时"
+                ),
+                "战斗内点击自动": (
+                    "进入战斗后若检测到「行动结束」，自动点击右上角的自动战斗按钮\n"
+                    "已在游戏内开启全局自动（设置→其他→自动战斗设置）的可以关闭"
                 ),
             }
         )
@@ -155,7 +160,11 @@ class ClearMapTask(BaseGfTask):
                     self.click(text, after_sleep=2)
                     count += 1
                     if text[0].name == "挑战":
-                        self.auto_battle(end_match=map_re, has_dialog=True)
+                        self.auto_battle(
+                            end_match=map_re,
+                            has_dialog=True,
+                            need_click_auto=self.config.get("战斗内点击自动", True),
+                        )
                     else:
                         self.skip_dialogs(end_match=map_re)
 
