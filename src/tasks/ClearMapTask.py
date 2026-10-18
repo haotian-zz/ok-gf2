@@ -8,46 +8,39 @@ from src.image.hsv_config import HSVRange as hR
 
 logger = Logger.get_logger(__name__)
 
-# 主线关卡名以数字开头（如 2-5），支线带字母前缀（如 SL-2-1、BH-2-2）
-main_map_re = re.compile(r"^\s*-?\s*\d")
 
-
-def is_branch_group(name_group):
-    """名字组里没有任何以数字开头的关卡名时视为支线。"""
-    names = [n for n in name_group if isinstance(n, str) and n not in (fL.not_clear_one, fL.now_icon)]
-    if not names:
-        return False
-    return not any(main_map_re.match(n) for n in names)
-
-
-def order_maps(maps, name_groups, main_first=True):
+def order_maps(maps, name_groups):
     """
-    把关卡和对应的名字组配对后按优先级排序：
-    1. 带未通关标记 / 当前位置标记的关卡
-    2. 主线关卡（main_first 为 True 时）
-    3. 支线关卡
-    同一优先级按 x 从左到右。
+    把关卡和对应的名字组配对后排序：带未通关标记 / 当前位置标记的关卡最先，其余按 x 从左到右。
     返回 [(map, name_group), ...]
     """
 
     def rank(item):
         current_map, group = item
-        if fL.not_clear_one in group or fL.now_icon in group:
-            return (0, current_map.x)
-        if main_first and is_branch_group(group):
-            return (2, current_map.x)
-        return (1, current_map.x)
+        marked = fL.not_clear_one in group or fL.now_icon in group
+        return (0 if marked else 1, current_map.x)
 
     return sorted(zip(maps, name_groups, strict=True), key=rank)
 
 
-def pick_candidate(ordered, done, locked):
-    """按排序后的 (map, name_group) 列表挑出第一个既没处理过也没判定未解锁的关卡，没有则返回 None。"""
-    for current_map, group in ordered:
-        if group & done or group & locked:
-            continue
-        return current_map, group
-    return None
+def pick_candidate(ordered, done, locked, anchor=None):
+    """
+    从排序后的 (map, name_group) 列表里挑下一个要点的关卡。
+
+    - 跳过已处理(done)和已判定未解锁(locked)的关卡
+    - anchor 为刚判定未解锁的关卡名：解锁它的前置只可能在它左边，所以只在它左边找，
+      取最靠近它的那个；anchor 不在屏幕上时退回最左边的可用关卡
+    - 返回 None 表示屏幕上没有可点的关卡
+    """
+    usable = [(m, g) for m, g in ordered if not (g & done) and not (g & locked)]
+    if not usable:
+        return None
+    if anchor:
+        anchor_box = next((m for m, g in ordered if anchor in g), None)
+        if anchor_box is not None:
+            left = [(m, g) for m, g in usable if m.x < anchor_box.x]
+            return left[-1] if left else None
+    return usable[0]
 
 
 class ClearMapTask(BaseGfTask):
@@ -60,7 +53,6 @@ class ClearMapTask(BaseGfTask):
                 "普通OCR": True,
                 "除杂色OCR1": True,
                 "除杂色OCR2": True,
-                "优先主线": False,
                 "战斗内点击自动": False,
                 "调试截图": True,
             }
@@ -78,10 +70,6 @@ class ClearMapTask(BaseGfTask):
                 "除杂色OCR2": (
                     "除杂色OCR2（宽松白灰色）：同时保留白色与浅灰色区域后再识别\n"
                     "适用场景：关卡卡片文字为白色或浅灰色，或普通OCR/除杂色OCR1均无法识别时"
-                ),
-                "优先主线": (
-                    "同一屏内先推数字开头的关卡（如 2-5），再推带字母前缀的（如 SL-2-1、BH-2-1）\n"
-                    "默认关闭，按从左到右的顺序推；注意 SL 剧情点通常是主线前置，开启后可能先碰到未解锁关卡"
                 ),
                 "战斗内点击自动": (
                     "进入战斗后若检测到「行动结束」，自动点击右上角的自动战斗按钮\n"
@@ -112,6 +100,10 @@ class ClearMapTask(BaseGfTask):
         if not processors:
             processors = [None, self.make_hsv_isolator(hR.WHITE), self.make_hsv_isolator(hR.WHITE_GRAY)]
 
+        anchor = None  # 最近一次判定为未解锁的关卡名，下一步只往它左边找前置
+        drags = 0  # 为了找前置关卡往右拖动地图的次数
+        max_drags = 3
+
         while True:
             self.sleep(1)
             self.next_frame()
@@ -130,7 +122,7 @@ class ClearMapTask(BaseGfTask):
             )
 
             # 关卡与名字组必须一起排序，否则 done/locked 记录会对应到错误的关卡
-            ordered = order_maps(maps, map_name_groups, main_first=self.config.get("优先主线", False))
+            ordered = order_maps(maps, map_name_groups)
             self.log_debug(f"maps: {[m for m, _ in ordered]}")
             self.debug_shot("scan", [m for m, _ in ordered])
 
@@ -140,10 +132,17 @@ class ClearMapTask(BaseGfTask):
                 self.log_info(f"推图完成, 共{count}个!", notify=True)
                 return
 
-            candidate = pick_candidate(ordered, done, locked)
+            candidate = pick_candidate(ordered, done, locked, anchor)
             if candidate is None:
+                if anchor and drags < max_drags:
+                    # 前置关卡不在屏幕内：往右拖动地图，把左边更早的关卡拖进来
+                    drags += 1
+                    self.log_info(f"{anchor} 的前置关卡不在屏幕内, 向左查看 ({drags}/{max_drags})", notify=False)
+                    self.swipe_relative(0.3, 0.5, 0.75, 0.5, duration=0.5)
+                    self.sleep(1)
+                    continue
                 if locked:
-                    raise Exception(f"当前屏幕剩余关卡都未解锁({sorted(locked)}), 请把视野移到前置关卡再启动")
+                    raise Exception(f"剩余关卡都未解锁({sorted(locked)}), 请手动把视野移到前置关卡再启动")
                 self.log_info(f"推图完成, 共{count}个!", notify=True)
                 return
             current_map, name_group = candidate
@@ -161,8 +160,9 @@ class ClearMapTask(BaseGfTask):
                 continue
 
             if self.find_boxes(boxes, match="完成前置关卡解锁"):
-                self.log_info(f"{current_map.name} 未解锁, 先推前置关卡", notify=False)
+                self.log_info(f"{current_map.name} 未解锁, 往左找前置关卡", notify=False)
                 locked.update(name_group)
+                anchor = current_map.name
                 self.close_map_panel()
                 continue
 
@@ -177,6 +177,7 @@ class ClearMapTask(BaseGfTask):
             if not action:
                 self.log_info(f"{current_map.name} 面板没有挑战/观看按钮, 视为未解锁", notify=False)
                 locked.update(name_group)
+                anchor = current_map.name
                 self.close_map_panel()
                 continue
 
@@ -192,7 +193,10 @@ class ClearMapTask(BaseGfTask):
             else:
                 self.skip_dialogs(end_match=map_re)
             done.update(name_group)
-            locked.clear()  # 推过一关后，之前未解锁的关卡可能已经解锁
+            # 推过一关后，之前未解锁的关卡可能已经解锁，重新从左往右判定
+            locked.clear()
+            anchor = None
+            drags = 0
             self.close_map_panel()
 
     def close_map_panel(self):

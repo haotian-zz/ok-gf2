@@ -15,7 +15,8 @@ logger = Logger.get_logger(__name__)
 pop_ups = ["点击空白处关闭", "点击屏幕任意位置继续", "点击任意位置继续", "新周期开启", "周期已重置"]
 number_re = re.compile(r"^\d+$")
 stamina_re = re.compile(r"^\d+/\d+")
-map_re = re.compile(r"^.{0,2}\s*-?\s*\d{1,2}\s*-\s*\d{1,2}\s*\*?$")
+# 关卡名：可选的字母前缀（SL-/BH-/今后其他组合）+ 章-关，如 3-1、SL-3-2、BH-3-4
+map_re = re.compile(r"^[^\d\s]{0,4}\s*\d{1,2}\s*-\s*\d{1,2}\s*\*?$")
 # 战斗中界面的标志：右下角「行动结束」或左上角「01/12 回合」计数
 battle_ui_re = re.compile(r"行动结束|\d{1,2}\s*/\s*\d{1,2}\s*回合")
 
