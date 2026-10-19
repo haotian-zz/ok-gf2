@@ -1,8 +1,9 @@
 import re
+import time
 
 from ok import Logger
 
-from src.core.BaseGfTask import BaseGfTask, map_re
+from src.core.BaseGfTask import pop_ups, BaseGfTask, map_re
 from src.image.hsv_config import HSVRange as hR
 
 logger = Logger.get_logger(__name__)
@@ -162,20 +163,56 @@ class ClearMapTask(BaseGfTask):
 
         self.log_info("推图开始", notify=False)
 
-        self.next_frame()
-        if self.ocr(match="作战开始", box=self.box.bottom):
-            # 上次停在部署界面（比如手动停止后再启动），先把这一关打完再回到选关页面继续
-            self.log_info("当前在部署界面，先打完这一关再继续推图", notify=True)
-            self.auto_battle(end_match=map_re, has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False))
-            self.close_map_panel()
-
         ordered = self.scan_maps()
         if not ordered:
-            raise Exception("未找到要推的图! 请停在关卡选择页面再启动")
+            # 不在选关页面：可能停在部署界面、战斗中或结算页（比如上次手动停止），先把这一关收尾再继续
+            if not self.resume_battle():
+                raise Exception("未找到要推的图! 请停在关卡选择页面再启动")
+            ordered = self.scan_maps()
+            if not ordered:
+                raise Exception("收尾后仍未回到选关页面, 请检查游戏画面")
 
         self.go_to_chapter_start()
         count = self.sweep_right()
         self.log_info(f"推图完成, 本次推进 {count} 关", notify=True)
+
+    def resume_battle(self, time_out=1200):
+        """
+        从非选关页面接管：部署界面 / 战斗中 / 继续前进 → 走 auto_battle；结算页点确认；任务失败则报错。
+        回到选关页面返回 True，认不出当前页面返回 False。
+        """
+        self.info_set("current_task", "接管当前战斗")
+        start = time.time()
+        unknown = 0
+        while time.time() - start < time_out:
+            self.next_frame()
+            boxes = self.ocr()
+            if self.find_boxes(boxes, match=map_re):
+                return True
+            if (
+                self.find_boxes(boxes, match="作战开始")
+                or self._is_battle_frame(boxes)
+                or self.find_boxes(boxes, match="继续前进")
+            ):
+                self.log_info("当前在部署界面或战斗中，先打完这一关再继续推图", notify=True)
+                self.auto_battle(end_match=map_re, has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False))
+                self.close_map_panel()
+                return True
+            if self.find_boxes(boxes, match="任务失败"):
+                self.debug_shot("resume_failed", boxes)
+                raise Exception("任务失败, 没打过!")
+            if confirm := self.find_boxes(boxes, match=self.fix_match_regex(["确认", "确认结算"])):
+                self.click(confirm, after_sleep=2)
+                continue
+            if self.find_boxes(boxes, match=pop_ups):
+                self.back(after_sleep=1)
+                continue
+            unknown += 1
+            if unknown >= 3:
+                self.debug_shot("resume_unknown", boxes)
+                return False
+            self.sleep(3)
+        return False
 
     def go_to_chapter_start(self):
         """
