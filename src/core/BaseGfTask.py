@@ -51,6 +51,8 @@ forbidden_restore_re = re.compile(r"晶条|晶体|钻石|购买|兑换|充值|�
 STAMINA_TAB_DY = 0.14  # 页签行相对弹窗标题中心的垂直偏移，单位：画面高度
 STAMINA_TAB_DX = 0.161  # 相邻页签中心的水平间距，单位：画面高度
 STAMINA_SAFE_TABS = (0, 1)  # 只允许点前两个页签（储存、道具），第三个是坍塌晶条
+PRESET_BOX = (0.75, 0.06, 0.995, 0.86)  # 「使用整备室配置」下拉框及其展开的编队列表
+PRESET_HEADER_Y = 0.12  # 下拉框标题在这条线以上，展开后的「整备室配置」选项在以下
 MAX_CONTINUE_STREAK = 8  # 连续点「继续前进」却没进入战斗的次数上限
 
 
@@ -100,11 +102,12 @@ def parse_time_option(option: str) -> list[float]:
 
 def parse_deploy_count(text):
     """「3/4」→ (3, 4)。斜杠常被 OCR 读成 1/l/I（如 '414'、'3l4'），单独一个三字符的也接受。"""
-    if m := re.search(r"(\d)\s*[/|\\]\s*(\d)", text):
-        return int(m.group(1)), int(m.group(2))
-    if m := re.fullmatch(r"(\d)[1lI](\d)", text.strip()):
-        return int(m.group(1)), int(m.group(2))
-    return None
+    m = re.search(r"(\d)\s*[/|\\]\s*(\d)", text) or re.fullmatch(r"(\d)[1lI](\d)", text.strip())
+    if not m:
+        return None
+    n, total = int(m.group(1)), int(m.group(2))
+    # 「4/4」偶尔被读成 412：总数比已上场还小肯定是读错了，当没读到
+    return (n, total) if total >= n else None
 
 
 class BaseGfTask(RuntimeMixin, BaseTask):
@@ -262,6 +265,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         识别右侧面板的卡片：战力数字定位卡片，蓝圈椎数用模板比对（OCR 认不出那么小的数字），
         立绘和 assets/card_avatars 里的模板比对直接认出是谁（认不出的 name 为 None，点一下后会自动学会）。
         """
+        if self._fix_panel_state():
+            self.next_frame()
         boxes = self._ocr_panel(PANEL_BOX, match=re.compile(r"^\d{3,6}$"))
         cards = find_cards(boxes, self.width, self.height, badge_of=lambda b: read_badge(self.frame, b, self.width, self.height))
         identify_cards(self.frame, cards, self.width, self.height, self._avatar_book)
@@ -300,6 +305,66 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         ok = bool(self._ocr_panel(TAB_BOX, match=self.fix_match_regex(["我的人形", "好友助战"])))
         self.debug_shot("panel_open" if ok else "panel_open_fail")
         return ok
+
+    def _fix_panel_state(self):
+        """
+        「我的人形」页签顶上有个「使用整备室配置」下拉框。误点它会展开「编队1…编队7」列表，
+        选中某个编队后面板只显示该编队的人形（空编队就是「暂无可选人形」，还会把场上阵容清掉）。
+        这里检查：面板里出现「编队n」就把它恢复成默认的「整备室配置」。返回是否做了修正。
+        """
+        boxes = self._ocr_panel(PRESET_BOX, match=[re.compile(r"编队\s*\d"), re.compile(r"整备室配置")])
+        presets = [b for b in boxes if re.search(r"编队\s*\d", b.name)]
+        if not presets:
+            return False
+        self.debug_shot("preset_fix", boxes)
+        for _ in range(2):
+            entries = [b for b in boxes if "整备室配置" in b.name and b.y > self.height * PRESET_HEADER_Y]
+            if entries:
+                self.log_info(f"面板上出现编队列表 {[b.name for b in presets]}，选回「整备室配置」", notify=True)
+                self.click(entries[0], after_sleep=1)
+                self.next_frame()
+                return True
+            # 列表没展开（标题就是「编队n」）：点标题展开下拉框
+            self.log_info(f"面板当前选中了 {presets[0].name}，展开下拉框选回整备室配置", notify=True)
+            self.click(presets[0], after_sleep=1)
+            self.next_frame()
+            boxes = self._ocr_panel(PRESET_BOX, match=[re.compile(r"编队\s*\d"), re.compile(r"整备室配置")])
+        self.log_info("没能把编队下拉框恢复成整备室配置", notify=True)
+        return True
+
+    def _lineup_full(self):
+        """阵容是否已满：优先看顶部计数；读不到就看地图上还有没有空地格。"""
+        count = self._deploy_count()
+        if count is not None:
+            return count[0] >= count[1]
+        _, empty = self._occupied_and_empty()
+        return not empty
+
+    def _make_room(self):
+        """阵容满时，到我的人形里把战力最低的已上场人形撤回，给助战腾一个位置。返回是否腾出了位置。"""
+        if not self._lineup_full():
+            return True
+        self._click_tab("我的人形")
+        self.sleep(0.5)
+        self.next_frame()
+        cards = self._scan_cards()
+        deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
+        deployed.sort(key=lambda c: c["power"])
+        for c in deployed:
+            name = self._click_card(c)
+            kind, button = self._deploy_button()
+            if kind != "withdraw":
+                if not self._select_unit_on_map(name):
+                    continue
+                kind, button = self._deploy_button()
+            if kind == "withdraw":
+                self.log_info(f"阵容已满，撤回战力最低的 {name}（{c['power']}）给助战腾位", notify=True)
+                self.click(button, after_sleep=1)
+                self.next_frame()
+                self.debug_shot("room_made")
+                return True
+        self.log_info("阵容已满但没撤回成功，助战只能试着顶替", notify=True)
+        return False
 
     def _deploy_count(self):
         """顶部「部署人形 3/4」，返回 (3, 4)；读不到就换一帧再试一次，还读不到返回 None。"""
@@ -548,12 +613,18 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             f"椎数>={min_badge} 且可能是 {role} 的 {len(candidates)} 张",
             notify=False,
         )
+        room_checked = False
         for c in candidates:
             x, y = c["center"]
             name = self._click_card(c)
             if role not in name:
                 self.log_info(f"{c['badge']}椎 战力{c['power']} 是 {name}，不是 {role}，跳过", notify=False)
                 continue
+            if not room_checked:
+                room_checked = True
+                self._make_room()
+                self._reselect_card("好友助战", x, y)()
+                self.next_frame()
             if self._deploy_selected_support(
                 f"{c['badge']}椎 {role}（战力 {c['power']}）", role, self._reselect_card("好友助战", x, y)
             ):
@@ -578,6 +649,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
     def _pick_strongest_support(self, tab):
         """兜底：切到「全部」筛选，按战力从高到低借第一个能部署的助战。"""
+        # 前面试点地格可能点中了己方单位，面板会跳回「我的人形」——那一页同样位置是「使用整备室配置」，
+        # 点下去会展开编队列表甚至清空阵容，所以先确保在好友助战页签
+        tab = self._click_tab("好友助战")
         fx, fy = filter_point(tab, "全部", self.width, self.height)
         self.click_relative(fx / self.width, fy / self.height, after_sleep=1)
         self.next_frame()
@@ -589,9 +663,18 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             # 列表里有打了勾的卡片 = 上一关借的助战还在场上，不用再借
             self.log_info(f"已有助战在场上 {[(c['name'], c['power']) for c in deployed]}，不再换", notify=True)
             return True
+        room_checked = False
         for c in cards[:3]:
             x, y = c["center"]
             name = self._click_card(c)
+            if not name:
+                self.log_info(f"战力 {c['power']} 的卡片点了没读到名字，跳过", notify=False)
+                continue
+            if not room_checked:
+                room_checked = True
+                self._make_room()
+                self._reselect_card("好友助战", x, y)()
+                self.next_frame()
             if self._deploy_selected_support(
                 f"战力最高 {name}（{c['badge']}椎 战力 {c['power']}）", name, self._reselect_card("好友助战", x, y)
             ):

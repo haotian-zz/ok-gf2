@@ -129,6 +129,8 @@ class TestPickCandidate(unittest.TestCase):
         self.assertEqual(parse_deploy_count("4/4作战效能"), (4, 4))
         self.assertEqual(parse_deploy_count("3 / 5"), (3, 5))
         self.assertEqual(parse_deploy_count("414"), (4, 4))
+        self.assertIsNone(parse_deploy_count("412"))  # 4/4 读成 412：总数小于已上场，不可信
+        self.assertEqual(parse_deploy_count("012"), (0, 2))
         self.assertEqual(parse_deploy_count("3l4"), (3, 4))
         self.assertIsNone(parse_deploy_count("35733"))
         self.assertIsNone(parse_deploy_count("部署人形"))
