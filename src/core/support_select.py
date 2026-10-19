@@ -1,51 +1,58 @@
 """
-部署界面「好友助战」选人的纯逻辑：卡片定位、椎数配对、已上场勾选判断。
+部署界面的纯逻辑：卡片定位、椎数角标识别、已上场勾选判断、空地格查找。
 坐标按 1280x768 实测，偏移统一用画面宽高的比例表达，换分辨率后仍成立。
 """
 
+import os
 import re
 
+import cv2
 import numpy as np
 
-badge_re = re.compile(r"^\d$")  # 卡片左上角蓝圈里的椎数
 power_re = re.compile(r"^\d{3,6}$")  # 卡片下方的作战效能
+digit_re = re.compile(r"^\d$")  # 地图上已上场单位头顶的编号
 
 # 右侧面板的位置（画面比例）
-PANEL_BOX = (0.75, 0.15, 0.995, 0.86)  # 卡片区域，含椎数角标和战力
+PANEL_BOX = (0.75, 0.15, 0.995, 0.86)  # 卡片区域
 NAME_BOX = (0.05, 0.80, 0.24, 0.90)  # 点中卡片后左下角的人形名字
 BUTTON_BOX = (0.74, 0.88, 0.99, 0.995)  # 右下角「部署人形 / 撤回人形」
 TAB_BOX = (0.74, 0.0, 0.95, 0.09)  # 「我的人形 / 好友助战」页签
+COUNT_BOX = (0.35, 0.0, 0.65, 0.09)  # 顶部「部署人形 3/4」
+MAP_BOX = (0.0, 0.08, 0.72, 0.86)  # 地图区域（排除右侧面板和底部按钮）
 # 属性筛选图标：页签中心往下 0.052 画面高，x 按顺序 全部/物理/燃烧/电导/冷凝
 FILTER_DY = 0.052
-FILTER_X = {"全部": 0.772, "物理": 0.809, "燃烧": 0.848, "电导": 0.887, "冷凝": 0.926}
+FILTER_X = {"全部": 0.791, "物理": 0.828, "燃烧": 0.867, "电导": 0.906, "冷凝": 0.945}
 # 卡片中心相对战力数字中心：往上 0.065 画面高
 CARD_DY = -0.065
 # 已上场的橙色勾相对战力数字中心：右 0.023 画面宽、上 0.105 画面高
 CHECK_DX, CHECK_DY = 0.023, -0.105
+# 椎数角标（蓝色小圆）中心相对战力数字中心
+BADGE_DX, BADGE_DY = -0.0242, -0.0814
+BADGE_WIN = 13  # 角标搜索窗半径，1280x768 下的像素
+BADGE_DIGIT_R = 5.5  # 只看圆内这个半径里的白色像素
+BADGE_SIZE = 13  # 模板尺寸
+BADGE_MIN_IOU = 0.6
+BADGE_DIR = os.path.join("assets", "support_badges")
+
+_badge_templates = None
 
 
 def _center(box):
     return box.x + box.width / 2, box.y + box.height / 2
 
 
-def find_cards(boxes, width, height):
+def find_cards(boxes, width, height, badge_of=None):
     """
-    由 OCR 结果找出卡片：每个战力数字代表一张卡片，并配对它左上方的椎数角标。
+    由 OCR 结果找出卡片：每个战力数字代表一张卡片。
+    :param badge_of: 可选，输入战力 box 返回椎数（int / None）
     :return: [{"power": int, "badge": int | None, "center": (x, y), "power_box": box}, ...] 按战力从高到低
     """
-    powers = [b for b in boxes if power_re.match(b.name)]
-    badges = [b for b in boxes if badge_re.match(b.name)]
     cards = []
-    for p in powers:
+    for p in boxes:
+        if not power_re.match(p.name):
+            continue
         px, py = _center(p)
-        badge = None
-        best = None
-        for b in badges:
-            bx, by = _center(b)
-            dx, dy = px - bx, py - by
-            if 0 < dx < 0.06 * width and 0.03 * height < dy < 0.14 * height:
-                if best is None or dy < best:
-                    best, badge = dy, int(b.name)
+        badge = badge_of(p) if badge_of else None
         cards.append({"power": int(p.name), "badge": badge, "center": (px, py + CARD_DY * height), "power_box": p})
     cards.sort(key=lambda c: -c["power"])
     return cards
@@ -81,6 +88,138 @@ def filter_point(tab_box, attr, width, height):
 def pick_candidates(cards, min_badge):
     """椎数达标的卡片，保持战力从高到低。"""
     return [c for c in cards if c["badge"] is not None and c["badge"] >= min_badge]
+
+
+# ------------------------------------------------------------------ 椎数角标
+def load_badge_templates(folder=BADGE_DIR):
+    """读取 assets/support_badges/*.png（13x13 二值图），文件名 dash 代表没椎（0）。"""
+    global _badge_templates
+    if _badge_templates is None:
+        templates = {}
+        if os.path.isdir(folder):
+            for name in os.listdir(folder):
+                stem, ext = os.path.splitext(name)
+                if ext.lower() != ".png":
+                    continue
+                img = cv2.imread(os.path.join(folder, name), cv2.IMREAD_GRAYSCALE)
+                if img is None or img.shape != (BADGE_SIZE, BADGE_SIZE):
+                    continue
+                templates[0 if stem == "dash" else int(stem)] = img > 127
+        _badge_templates = templates
+    return _badge_templates
+
+
+def find_badge_disk(frame, x, y, scale=1.0):
+    """在 (x, y) 附近找蓝色小圆，返回圆心 (cx, cy)；找不到返回 None。"""
+    r = int(round(BADGE_WIN * scale))
+    h, w = frame.shape[:2]
+    x0, y0 = max(0, int(x) - r), max(0, int(y) - r)
+    win = frame[y0 : min(h, int(y) + r), x0 : min(w, int(x) + r)]
+    if win.size == 0:
+        return None
+    hsv = cv2.cvtColor(win, cv2.COLOR_BGR2HSV)
+    blue = ((hsv[..., 0] > 85) & (hsv[..., 0] < 110) & (hsv[..., 1] > 25) & (hsv[..., 2] > 170)).astype(np.uint8)
+    blue = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    n, _, stats, cents = cv2.connectedComponentsWithStats(blue)
+    lo, hi = 9 * scale, 18 * scale
+    best = None
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        bw, bh = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+        if not (60 * scale * scale <= area <= 260 * scale * scale and lo <= bw <= hi and lo <= bh <= hi):
+            continue
+        cx, cy = cents[i]
+        d = (x0 + cx - x) ** 2 + (y0 + cy - y) ** 2
+        if best is None or d < best[0]:
+            best = (d, x0 + cx, y0 + cy)
+    return None if best is None else (best[1], best[2])
+
+
+def badge_digit_mask(frame, cx, cy, scale=1.0, dx=0.0, dy=0.0, white=215):
+    """圆内的白色像素，重采样成 13x13 二值图。"""
+    r = BADGE_SIZE // 2
+    out = np.zeros((BADGE_SIZE, BADGE_SIZE), bool)
+    h, w = frame.shape[:2]
+    for oy in range(BADGE_SIZE):
+        for ox in range(BADGE_SIZE):
+            if (ox - r) ** 2 + (oy - r) ** 2 > BADGE_DIGIT_R**2:
+                continue
+            px = int(round(cx + (dx + ox - r) * scale))
+            py = int(round(cy + (dy + oy - r) * scale))
+            if 0 <= py < h and 0 <= px < w and frame[py, px].min() > white:
+                out[oy, ox] = True
+    return out
+
+
+def _iou(a, b):
+    return float((a & b).sum() / max(1, (a | b).sum()))
+
+
+def read_badge(frame, power_box, width, height, templates=None):
+    """
+    读战力数字左上方蓝圈里的椎数：0 表示「—」，None 表示没找到蓝圈或没匹配上任何模板。
+    """
+    if frame is None:
+        return None
+    templates = templates if templates is not None else load_badge_templates()
+    if not templates:
+        return None
+    scale = height / 768
+    px, py = _center(power_box)
+    disk = find_badge_disk(frame, px + BADGE_DX * width, py + BADGE_DY * height, scale)
+    if disk is None:
+        return None
+    cx, cy = disk
+    best, best_score = None, 0.0
+    for digit, tpl in templates.items():
+        score = max(_iou(badge_digit_mask(frame, cx, cy, scale, dx, dy), tpl) for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+        if score > best_score:
+            best, best_score = digit, score
+    return best if best_score >= BADGE_MIN_IOU else None
+
+
+# ------------------------------------------------------------------ 地格
+def find_tiles(frame, width, height):
+    """
+    地图上可部署的蓝色地格（含已站人的），返回 [{"center": (x, y), "bbox": (x, y, w, h)}, ...]，先上后下、先左后右。
+    """
+    if frame is None:
+        return []
+    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    region = frame[y0:y1, x0:x1]
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (85, 15, 150), (115, 200, 255))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    n, _, stats, cents = cv2.connectedComponentsWithStats(mask)
+    s = height / 768
+    tiles = []
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        bx, by, bw, bh = stats[i, :4]
+        if area < 800 * s * s or not (80 * s <= bw <= 190 * s) or not (50 * s <= bh <= 140 * s):
+            continue
+        cx, cy = x0 + bx + bw / 2, y0 + by + bh / 2
+        tiles.append({"center": (cx, cy), "bbox": (x0 + bx, y0 + by, int(bw), int(bh))})
+    tiles.sort(key=lambda t: (t["center"][1], t["center"][0]))
+    return tiles
+
+
+def empty_tiles(tiles, digit_boxes, height):
+    """去掉头顶有单位编号（1~4 的小白框）的地格；编号在地格上方约 0.5~1.3 个地格高处。"""
+    out = []
+    for t in tiles:
+        bx, by, bw, bh = t["bbox"]
+        occupied = False
+        for d in digit_boxes:
+            if not digit_re.match(d.name):
+                continue
+            dx, dy = _center(d)
+            if bx - 0.1 * bw <= dx <= bx + 1.1 * bw and by - 1.3 * bh <= dy <= by + 0.6 * bh:
+                occupied = True
+                break
+        if not occupied:
+            out.append(t)
+    return out
 
 
 def make_check_frame(width, height, checks):

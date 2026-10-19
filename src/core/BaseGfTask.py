@@ -8,14 +8,19 @@ from src.core.base_mixin.runtime_mixin import RuntimeMixin
 from src.core.debug_shot import save_debug_shot
 from src.core.support_select import (
     BUTTON_BOX,
+    COUNT_BOX,
+    MAP_BOX,
     NAME_BOX,
     PANEL_BOX,
     TAB_BOX,
     check_point,
+    empty_tiles,
     filter_point,
     find_cards,
+    find_tiles,
     is_orange_check,
     pick_candidates,
+    read_badge,
 )
 from src.data.FeatureList import FeatureList as fL
 from src.image.frame_processs import isolate_by_hsv_ranges
@@ -232,9 +237,17 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         x, y, to_x, to_y = box
         return self.ocr(x, y, to_x, to_y, **kw)
 
-    def _ocr_panel_scaled(self, box, match):
-        # 椎数角标只有十几像素，把局部放大 3 倍再识别
-        return self._ocr_panel(box, match=match, target_height=self.height * 3)
+    def _scan_cards(self):
+        """识别右侧面板的卡片：战力数字定位卡片，蓝圈椎数用模板比对（OCR 认不出那么小的数字）。"""
+        boxes = self._ocr_panel(PANEL_BOX, match=re.compile(r"^\d{3,6}$"))
+        return find_cards(boxes, self.width, self.height, badge_of=lambda b: read_badge(self.frame, b, self.width, self.height))
+
+    def _deploy_count(self):
+        """顶部「部署人形 3/4」，返回 (3, 4)；读不到返回 None。"""
+        for b in self._ocr_panel(COUNT_BOX):
+            if m := re.search(r"(\d)\s*/\s*(\d)", b.name):
+                return int(m.group(1)), int(m.group(2))
+        return None
 
     def _click_tab(self, name):
         tab = self._ocr_panel(TAB_BOX, match=self.fix_match_regex([name]))
@@ -280,7 +293,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self._click_tab("我的人形")
         self.sleep(0.5)
         self.next_frame()
-        cards = find_cards(self._ocr_panel_scaled(PANEL_BOX, match=re.compile(r"^\d{1,6}$")), self.width, self.height)
+        cards = self._scan_cards()
         deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
         self.debug_shot("support_my_tab", [c["power_box"] for c in deployed])
         self.log_info(f"我的人形已上场 {len(deployed)} 张卡片", notify=False)
@@ -306,12 +319,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         fx, fy = filter_point(tab, attr, self.width, self.height)
         self.click_relative(fx / self.width, fy / self.height, after_sleep=1)
         self.next_frame()
-        cards = find_cards(self._ocr_panel_scaled(PANEL_BOX, match=re.compile(r"^\d{1,6}$")), self.width, self.height)
+        cards = self._scan_cards()
         self.debug_shot("support_scan", [c["power_box"] for c in cards])
         candidates = pick_candidates(cards, min_badge)
         self.log_info(
-            f"好友助战({attr or '全部'}) 识别 {len(cards)} 张，椎数>={min_badge} 的 {len(candidates)} 张: "
-            f"{[(c['badge'], c['power']) for c in candidates]}",
+            f"好友助战({attr or '全部'}) 识别 {len(cards)} 张 {[(c['badge'], c['power']) for c in cards]}，"
+            f"椎数>={min_badge} 的 {len(candidates)} 张",
             notify=False,
         )
         for c in candidates:
@@ -341,6 +354,67 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.log_info(f"点了部署但没确认上场，换下一张", notify=False)
         self.log_info(f"没有 {min_badge} 椎及以上的 {role} 助战，不借，直接开战", notify=True)
         return False
+
+    def fill_lineup(self, max_rounds=4):
+        """
+        把阵容补满：顶部「部署人形 n/m」不满时，到我的人形里按战力从高到低挑没上场的卡片，
+        选中卡片 → 点一个空地格 → 点「部署人形」，直到 n == m 或没有可用的卡片/地格。
+        """
+        self.info_set("current_task", "fill_lineup")
+        self.next_frame()
+        count = self._deploy_count()
+        if count is None:
+            self.log_info("没读到部署人形计数，跳过补满阵容", notify=False)
+            return False
+        if count[0] >= count[1]:
+            return True
+        self.log_info(f"阵容 {count[0]}/{count[1]}，开始补满", notify=True)
+        self._click_tab("我的人形")
+        self.sleep(0.5)
+        tried = set()
+        for _ in range(max_rounds):
+            self.next_frame()
+            cards = self._scan_cards()
+            spare = [
+                c
+                for c in cards
+                if c["power"] not in tried and not is_orange_check(self.frame, *check_point(c, self.width, self.height))
+            ]
+            if not spare:
+                self.log_info("我的人形里没有可补的卡片了", notify=False)
+                break
+            card = spare[0]
+            tried.add(card["power"])
+            x, y = card["center"]
+            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+            self.next_frame()
+            tiles = find_tiles(self.frame, self.width, self.height)
+            digits = self.ocr(*MAP_BOX, match=re.compile(r"^\d$"))
+            free = empty_tiles(tiles, digits, self.height)
+            self.debug_shot("lineup_tiles", digits)
+            self.log_info(f"补阵容: 选中战力 {card['power']}，地格 {len(tiles)} 个，空的 {len(free)} 个", notify=False)
+            placed = False
+            for tile in free:
+                tx, ty = tile["center"]
+                self.click_relative(tx / self.width, ty / self.height, after_sleep=0.8)
+                self.next_frame()
+                kind, button = self._deploy_button()
+                if kind != "deploy":
+                    continue
+                self.click(button, after_sleep=1.5)
+                self.next_frame()
+                new = self._deploy_count()
+                if new and new[0] > count[0]:
+                    count = new
+                    placed = True
+                    self.log_info(f"已部署战力 {card['power']} 的人形，阵容 {count[0]}/{count[1]}", notify=True)
+                    break
+            if not placed:
+                self.log_info(f"战力 {card['power']} 没能部署，换下一张", notify=False)
+            if count[0] >= count[1]:
+                break
+        self.debug_shot("lineup_done")
+        return count[0] >= count[1]
 
     def _handle_stamina_popup(self, title):
         """
@@ -462,6 +536,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.sleep(2)
             if self.config.get("借好友助战", False):
                 self.borrow_support()
+            if self.config.get("自动补满阵容", False):
+                self.fill_lineup()
+            if self.config.get("借好友助战", False) or self.config.get("自动补满阵容", False):
                 result = self.wait_ocr(match="作战开始", box=self.box.bottom, time_out=10, raise_if_not_found=True)
             self.click_box(result, after_sleep=1)
             start_result = self.skip_dialogs(

@@ -23,11 +23,13 @@ from src.core.BaseGfTask import (
 from src.core.debug_shot import save_debug_shot
 from src.core.support_select import (
     check_point,
+    empty_tiles,
     filter_point,
     find_cards,
     is_orange_check,
     make_check_frame,
     pick_candidates,
+    read_badge,
 )
 from src.tasks.ClearMapTask import canonical_name, merge_maps, order_maps, pick_candidate
 
@@ -191,52 +193,72 @@ class TestStaminaPopup(unittest.TestCase):
 
 
 class TestSupportSelect(unittest.TestCase):
-    """按 1280x768 好友助战面板实测：角标中心 (975,130)/(1068,130)，战力中心 (1005,198)/(1098,198)，第二行各下移 112。"""
+    """按 1280x768 好友助战面板实测：战力中心 (1033,198)/(1126,198)/(1213,198)，第二行各下移 112。"""
 
     W, H = 1280, 768
+    FIXTURE = Path(__file__).resolve().parent / "fixtures" / "support_panel_1280x768.png"
 
     def boxes(self):
         return [
-            Box(969, 122, 12, 16, name="6"),
-            Box(999, 190, 36, 16, name="25871"),
-            Box(1092, 190, 36, 16, name="17405"),  # 角标是「—」，识别不到数字
-            Box(1155, 122, 12, 16, name="1"),
-            Box(1185, 190, 36, 16, name="17342"),
-            Box(969, 234, 12, 16, name="4"),
-            Box(999, 302, 36, 16, name="16083"),
-            Box(1030, 70, 50, 20, name="32757"),  # 顶部作战效能，不在面板里但也不该配到角标
+            Box(1015, 190, 36, 16, name="25871"),
+            Box(1108, 190, 36, 16, name="17405"),
+            Box(1195, 190, 36, 16, name="17342"),
+            Box(1015, 302, 36, 16, name="16083"),
+            Box(1108, 302, 36, 16, name="5274"),
+            Box(1195, 302, 36, 16, name="2830"),
         ]
 
-    def test_find_cards_pairs_badges(self):
-        cards = find_cards(self.boxes(), self.W, self.H)
-        got = [(c["power"], c["badge"]) for c in cards]
-        self.assertEqual(got, [(32757, None), (25871, 6), (17405, None), (17342, 1), (16083, 4)])
-        c6 = cards[1]
-        self.assertAlmostEqual(c6["center"][0], 1017, delta=3)
+    def test_find_cards_sorted_with_badge_reader(self):
+        badges = {"25871": 6, "17405": 0, "17342": 1, "16083": 4, "5274": 1, "2830": None}
+        cards = find_cards(self.boxes(), self.W, self.H, badge_of=lambda b: badges[b.name])
+        self.assertEqual([(c["power"], c["badge"]) for c in cards],
+                         [(25871, 6), (17405, 0), (17342, 1), (16083, 4), (5274, 1), (2830, None)])
+        c6 = cards[0]
+        self.assertAlmostEqual(c6["center"][0], 1033, delta=3)
         self.assertAlmostEqual(c6["center"][1], 198 - 0.065 * self.H, delta=3)
 
     def test_pick_candidates(self):
-        cards = find_cards(self.boxes(), self.W, self.H)
+        badges = {"25871": 6, "17405": 0, "17342": 1, "16083": 4, "5274": 1, "2830": None}
+        cards = find_cards(self.boxes(), self.W, self.H, badge_of=lambda b: badges[b.name])
         self.assertEqual([c["power"] for c in pick_candidates(cards, 6)], [25871])
         self.assertEqual([c["power"] for c in pick_candidates(cards, 4)], [25871, 16083])
         self.assertEqual(pick_candidates(cards, 7), [])
 
+    def test_read_badge_from_real_panel(self):
+        import cv2
+
+        frame = cv2.imread(str(self.FIXTURE))
+        self.assertIsNotNone(frame)
+        expected = {"25871": 6, "17405": 0, "17342": 1, "16083": 4, "5274": 1, "2830": 1}
+        for b in self.boxes():
+            self.assertEqual(read_badge(frame, b, self.W, self.H), expected[b.name], b.name)
+        # 没有蓝圈的位置读不到
+        self.assertIsNone(read_badge(frame, Box(600, 400, 36, 16, name="1234"), self.W, self.H))
+
     def test_orange_check(self):
         cards = find_cards(self.boxes(), self.W, self.H)
-        c6 = next(c for c in cards if c["badge"] == 6)
-        x, y = check_point(c6, self.W, self.H)
-        self.assertAlmostEqual(x, 1046, delta=3)
+        c = cards[0]
+        x, y = check_point(c, self.W, self.H)
+        self.assertAlmostEqual(x, 1062, delta=3)
         self.assertAlmostEqual(y, 117, delta=3)
         frame = make_check_frame(self.W, self.H, [(x, y)])
         self.assertTrue(is_orange_check(frame, x, y))
-        other = next(c for c in cards if c["badge"] == 4)
-        self.assertFalse(is_orange_check(frame, *check_point(other, self.W, self.H)))
+        self.assertFalse(is_orange_check(frame, *check_point(cards[3], self.W, self.H)))
         self.assertFalse(is_orange_check(None, x, y))
 
     def test_filter_point(self):
-        tab = Box(1075, 22, 110, 16, name="好友助战")
+        tab = Box(1100, 22, 110, 16, name="好友助战")
         x, y = filter_point(tab, "物理", self.W, self.H)
-        self.assertAlmostEqual(x, 1035, delta=4)
+        self.assertAlmostEqual(x, 1060, delta=4)
         self.assertAlmostEqual(y, 70, delta=4)
         x_all, _ = filter_point(tab, None, self.W, self.H)
-        self.assertAlmostEqual(x_all, 988, delta=4)
+        self.assertAlmostEqual(x_all, 1012, delta=4)
+
+    def test_empty_tiles(self):
+        tiles = [
+            {"center": (182, 365), "bbox": (121, 331, 126, 71)},  # 头顶有 3
+            {"center": (85, 384), "bbox": (36, 345, 121, 116)},  # 空
+            {"center": (249, 434), "bbox": (181, 388, 137, 98)},  # 头顶有 2
+        ]
+        digits = [Box(182, 280, 18, 18, name="3"), Box(252, 342, 18, 18, name="2"), Box(1030, 70, 30, 20, name="4")]
+        self.assertEqual([t["center"] for t in empty_tiles(tiles, digits, self.H)], [(85, 384)])
