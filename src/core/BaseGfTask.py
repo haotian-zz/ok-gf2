@@ -461,13 +461,17 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return False
 
     def _deploy_button(self):
-        """右下角按钮：("deploy", box) 部署人形 / ("withdraw", box) 撤回人形 / ("hint", box) 请点击地格 / (None, None)。"""
+        """右下角按钮：("deploy", box) 部署人形 / ("withdraw", box) 撤回人形 / ("hint", box) 请点击地格 /
+        ("swap", box) 编入队伍（顶替地图上选中的单位）/ ("blocked", box) 无法部署 / (None, None)。"""
         boxes = self._ocr_panel(BUTTON_BOX)
         self.log_info(f"右下角按钮: {[b.name for b in boxes]}", notify=False)
         for b in boxes:
-            if re.fullmatch(r"\s*(部署人形|编入队伍)\s*", b.name):
-                # 低等级人形的按钮叫「编入队伍」，作用一样
+            if re.fullmatch(r"\s*部署人形\s*", b.name):
                 return "deploy", b
+            if re.fullmatch(r"\s*编入队伍\s*", b.name):
+                # 地图上还选中着一个单位时点卡片，按钮变成「编入队伍」= 用这张卡顶替选中的单位
+                # （实录：刚部署完的助战还处于选中状态，补人时把助战顶掉了），要先取消选中
+                return "swap", b
             if re.fullmatch(r"\s*撤回人形\s*", b.name):
                 return "withdraw", b
         for b in boxes:
@@ -536,12 +540,16 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if kind == "withdraw" and card_name in self._selected_role_name():
             self.log_info(f"{label} 已在场上", notify=True)
             return True
-        if kind in ("withdraw", "blocked") and reselect:
+        if kind in ("withdraw", "blocked", "swap") and reselect:
             # 地图上还挂着别的格子/单位，先取消再重选这张卡
             self._clear_selection()
             reselect()
             self.next_frame()
             kind, button = self._deploy_button()
+        if kind == "swap":
+            self.log_info(f"{label} 按钮是「编入队伍」（会顶替地图上选中的单位），不点，跳过", notify=False)
+            self._clear_selection()
+            return False
         if kind == "hint":
             candidates = self._candidate_tiles()
             if not candidates:
