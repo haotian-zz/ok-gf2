@@ -58,6 +58,7 @@ STAMINA_SAFE_TABS = (0, 1)  # 只允许点前两个页签（储存、道具）�
 PRESET_BOX = (0.75, 0.06, 0.995, 0.86)  # 「使用整备室配置」下拉框及其展开的编队列表
 PRESET_HEADER_Y = 0.12  # 下拉框标题在这条线以上，展开后的「整备室配置」选项在以下
 MAX_CONTINUE_STREAK = 8  # 连续点「继续前进」却没进入战斗的次数上限
+TAB_FALLBACK_XY = {"我的人形": (0.815, 0.039), "好友助战": (0.902, 0.039)}  # 页签 OCR 偶尔漏读时按固定位置点
 
 
 def box_center(box):
@@ -85,6 +86,14 @@ def popup_texts(boxes, title_box, height):
         if cy < by < cy + 0.5 * height and abs(bx - cx) < 0.42 * height:
             out.append(b.name)
     return out
+
+
+def stamina_value(boxes, height):
+    """右上角「69/240」里当前体力的数值；读不到返回 None。"""
+    for b in boxes:
+        if b.y < 0.1 * height and (m := stamina_re.match(b.name.replace(" ", ""))):
+            return int(m.group(0).split("/")[0])
+    return None
 
 
 def tab_count(boxes, tab_x, tab_y, height):
@@ -324,50 +333,104 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         t = (text or "").replace(" ", "")
         return bool(name) and (name in t or t in name and len(t) >= 2)
 
-    def _fix_panel_state(self):
-        """
-        「我的人形」页签顶上的「使用整备室配置」下拉框被误点会展开「编队1…编队7」列表。
-        列表展开着就把它收起来：有配置的编队名就选它，否则选「整备室配置」。返回是否做了修正。
-        """
-        boxes = self._preset_boxes()
-        below = [b for b in boxes if b.y > self.height * PRESET_HEADER_Y]
-        entries = [b for b in below if re.search(r"编队\s*\d", b.name) or "整备室配置" in b.name]
-        if len(entries) < 2:
-            return False
-        self.debug_shot("preset_fix", boxes)
-        name = self._preset_name()
-        pick = next((b for b in below if self._preset_text_like(b.name, name)), None) if name else None
-        if pick is None:
-            pick = next((b for b in below if "整备室配置" in b.name), entries[0])
-        self.log_info(f"面板上展开着编队列表，选「{pick.name}」收起", notify=True)
-        self.click(pick, after_sleep=1)
-        self.next_frame()
-        return True
-
-    def apply_preset(self, name):
-        """在「我的人形」页签的「使用整备室配置」下拉框里选中名为 name 的编队。返回是否选中。"""
-        self._click_tab("我的人形")
+    def _preset_state(self):
+        """下拉框区域 OCR：(全部, 标题行, 标题下方, 下方里的编队/整备室配置条目)。条目 >= 2 说明列表展开着。"""
         boxes = self._preset_boxes()
         header = [b for b in boxes if b.y < self.height * PRESET_HEADER_Y]
-        if any(self._preset_text_like(b.name, name) for b in header):
-            self.log_info(f"当前已是编队「{name}」", notify=False)
-            return True
+        below = [b for b in boxes if b.y > self.height * PRESET_HEADER_Y]
+        entries = [b for b in below if re.search(r"编队\s*\d", b.name) or "整备室配置" in b.name]
+        return boxes, header, below, entries
+
+    def _click_preset_header(self, header):
         if header:
             self.click(header[0], after_sleep=1)
         else:
             self.click_relative(0.878, 0.097, after_sleep=1)
         self.next_frame()
-        boxes = self._preset_boxes()
-        entries = [b for b in boxes if b.y > self.height * PRESET_HEADER_Y and self._preset_text_like(b.name, name)]
+
+    def _collapse_preset_list(self, header, below, entries):
+        """
+        把展开着的编队列表收起来。游戏里点当前已选中的那一项不会收起（实录：已是编队1再点编队1，列表还开着），
+        所以：想选的项已经是当前项就点标题收起；否则点那一项。还开着就选别的项再切回来（每次换选择都会收起）。
+        """
+        name = self._preset_name()
+        key = name or "整备室配置"
+        target = next((b for b in below if self._preset_text_like(b.name, key)), None)
+        same = any(self._preset_text_like(h.name, key) for h in header)
+        if same or target is None:
+            self.log_info("面板上展开着编队列表，当前项就是要的，点标题收起", notify=True)
+            self._click_preset_header(header)
+        else:
+            self.log_info(f"面板上展开着编队列表，选「{target.name}」收起", notify=True)
+            self.click(target, after_sleep=1)
+            self.next_frame()
+        _, header, below, entries = self._preset_state()
+        if len(entries) < 2:
+            return True
+        other = next((b for b in below if not self._preset_text_like(b.name, key)), None)
+        if other is None:
+            self.log_info("编队列表还开着，也没别的项可点", notify=True)
+            return False
+        if getattr(self, "_collapsing_preset", False):
+            self.log_info("编队列表还开着，已经在兜底里了，不再递归", notify=True)
+            return False
+        self.log_info(f"编队列表还开着，先选「{other.name}」再切回「{key}」", notify=True)
+        self.click(other, after_sleep=1)
+        self.next_frame()
+        if name:
+            self._collapsing_preset = True
+            try:
+                self.apply_preset(name)
+            finally:
+                self._collapsing_preset = False
+        _, _, _, entries = self._preset_state()
+        return len(entries) < 2
+
+    def _fix_panel_state(self):
+        """
+        「我的人形」页签顶上的「使用整备室配置」下拉框被误点会展开「编队1…编队7」列表。
+        列表展开着就把它收起来。返回是否做了修正。
+        """
+        boxes, header, below, entries = self._preset_state()
+        if len(entries) < 2:
+            return False
+        self.debug_shot("preset_fix", boxes)
+        self._collapse_preset_list(header, below, entries)
+        return True
+
+    def apply_preset(self, name):
+        """在「我的人形」页签的「使用整备室配置」下拉框里选中名为 name 的编队。返回是否选中。"""
+        self._click_tab("我的人形")
+        # 标题 OCR 偶尔漏读一帧（实录：已是编队1却没读到，白白展开了列表），多读两帧再决定
+        for attempt in range(3):
+            boxes, header, below, entries = self._preset_state()
+            if any(self._preset_text_like(b.name, name) for b in header):
+                if len(entries) >= 2:
+                    self.log_info(f"当前已是编队「{name}」，但列表展开着，收起", notify=False)
+                    self._collapse_preset_list(header, below, entries)
+                else:
+                    self.log_info(f"当前已是编队「{name}」", notify=False)
+                return True
+            if header or entries:
+                break
+            self.sleep(0.4)
+            self.next_frame()
+        if len(entries) < 2:
+            self._click_preset_header(header)
+            boxes, header, below, entries = self._preset_state()
+        picks = [b for b in below if self._preset_text_like(b.name, name)]
         self.debug_shot("preset_list", boxes)
-        if not entries:
+        if not picks:
             self.log_info(f"编队列表里没找到「{name}」: {[b.name for b in boxes]}，不切编队", notify=True)
             self._fix_panel_state()
             return False
-        self.click(entries[0], after_sleep=1.5)
+        self.click(picks[0], after_sleep=1.5)
         self.next_frame()
-        boxes = self._preset_boxes()
-        header = [b for b in boxes if b.y < self.height * PRESET_HEADER_Y]
+        boxes, header, below, entries = self._preset_state()
+        if len(entries) >= 2:
+            self.log_info("点了编队后列表没收起，点标题收起", notify=False)
+            self._click_preset_header(header)
+            boxes, header, below, entries = self._preset_state()
         ok = any(self._preset_text_like(b.name, name) for b in header)
         self.debug_shot("preset_applied", boxes)
         self.log_info(f"已切到编队「{name}」，阵容 {self._deploy_count()}" if ok else f"点了编队「{name}」但标题没变: {[b.name for b in header]}", notify=True)
@@ -438,12 +501,23 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return None
 
     def _click_tab(self, name):
-        tab = self._ocr_panel(TAB_BOX, match=self.fix_match_regex([name]))
-        if not tab:
+        """点「我的人形 / 好友助战」页签。OCR 偶尔漏读（实录：页签明明在却没认出来），多读几帧，再不行按固定位置点。"""
+        for attempt in range(3):
+            tab = self._ocr_panel(TAB_BOX, match=self.fix_match_regex([name]))
+            if tab:
+                self.click(tab[0], after_sleep=1)
+                self.next_frame()
+                return tab[0]
+            self.sleep(0.5)
+            self.next_frame()
+        xy = TAB_FALLBACK_XY.get(name)
+        if xy is None:
             raise Exception(f"部署界面没找到「{name}」页签")
-        self.click(tab[0], after_sleep=1)
+        self.log_info(f"页签「{name}」OCR 没认出来，按固定位置点", notify=True)
+        self.debug_shot(f"tab_fallback_{name}")
+        self.click_relative(xy[0], xy[1], after_sleep=1)
         self.next_frame()
-        return tab[0]
+        return Box(int(xy[0] * self.width) - 35, int(xy[1] * self.height) - 10, 70, 20, name=name)
 
     def _selected_role_name(self):
         """左下角当前选中人形的名字，去掉等级后缀，如 '莱娅Lv.60格' -> '莱娅'。"""
@@ -809,6 +883,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         :return: True 弹窗已消失（恢复成功）；False 两个页签都没用上，弹窗已取消
         """
         points = stamina_tab_points(title, self.height)
+        before = stamina_value(self.ocr(), self.height)
         for idx in STAMINA_SAFE_TABS:
             x, y = points[idx]
             self.click_relative(x / self.width, y / self.height, after_sleep=1)
@@ -831,7 +906,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 self.log_info(f"体力弹窗页签{idx + 1} 没找到确认按钮，跳过", notify=False)
                 continue
             self.click(confirm[0], after_sleep=2)
-            # 确认后弹窗要过一会儿才关（实录：接入密钥已经扣了，2 秒后标题还在，误判成失败又点了取消）
+            # 确认后弹窗要过一会儿才关，用接入密钥兑换成功后弹窗甚至一直开着（实录：9/240 -> 69/240 还在），
+            # 所以看右上角体力数字有没有涨：涨了就算成功，自己把弹窗关掉
             for _ in range(4):
                 self.next_frame()
                 boxes = self.ocr()
@@ -839,8 +915,14 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                     self.log_info(f"已用体力弹窗页签{idx + 1} 恢复体力（数量 {count}）", notify=True)
                     self.debug_shot("stamina_restored", boxes)
                     return True
+                after = stamina_value(boxes, self.height)
+                if before is not None and after is not None and after > before:
+                    self.log_info(f"已用体力弹窗页签{idx + 1} 恢复体力 {before}→{after}，弹窗还开着，关掉继续", notify=True)
+                    self.debug_shot("stamina_restored", boxes)
+                    self._cancel_stamina_popup()
+                    return True
                 self.sleep(1)
-            self.log_info(f"体力弹窗页签{idx + 1} 确认后弹窗仍在，换下一个页签", notify=False)
+            self.log_info(f"体力弹窗页签{idx + 1} 确认后弹窗仍在、体力没变（{before}），换下一个页签", notify=False)
             self.debug_shot(f"stamina_tab{idx + 1}_after_confirm", boxes)
         self._cancel_stamina_popup()
         return False

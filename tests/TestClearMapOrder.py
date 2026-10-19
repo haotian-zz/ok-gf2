@@ -20,6 +20,7 @@ from src.core.BaseGfTask import (
     popup_texts,
     stamina_popup_re,
     stamina_tab_points,
+    stamina_value,
     tab_count,
 )
 from src.core.debug_shot import save_debug_shot
@@ -228,6 +229,14 @@ class TestStaminaPopup(unittest.TestCase):
             Box(730, 530, 40, 20, name="确认"),
         ]
         self.assertEqual(popup_texts(boxes, self.title, self.h), ["快速取出调度室储存情报拼图", "确认"])
+
+    def test_stamina_value(self):
+        # 实录：接入密钥兑换后弹窗还开着，右上角 9/240 变成 69/240，靠这个数判断成功
+        boxes = [Box(1085, 22, 46, 18, name="9/240"), Box(600, 345, 28, 16, name="136"), Box(730, 530, 40, 20, name="确认")]
+        self.assertEqual(stamina_value(boxes, self.h), 9)
+        self.assertEqual(stamina_value([Box(1085, 22, 50, 18, name="69 /240")], self.h), 69)
+        self.assertIsNone(stamina_value([Box(1085, 400, 46, 18, name="9/240")], self.h))  # 不在顶部
+        self.assertIsNone(stamina_value([Box(1085, 22, 46, 18, name="确认")], self.h))
 
     def test_tab_count(self):
         boxes = [Box(600, 345, 28, 16, name="121"), Box(720, 345, 36, 16, name="6140"), Box(1140, 70, 50, 20, name="6140")]
