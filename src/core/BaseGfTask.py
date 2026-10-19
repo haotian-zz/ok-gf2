@@ -266,14 +266,74 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return name
 
     def _deploy_button(self):
+        """右下角按钮：("deploy", box) 部署人形 / ("withdraw", box) 撤回人形 / ("hint", box) 请点击地格 / (None, None)。"""
         boxes = self._ocr_panel(BUTTON_BOX)
         self.log_info(f"右下角按钮: {[b.name for b in boxes]}", notify=False)
         for b in boxes:
-            if "部署" in b.name:
+            if re.fullmatch(r"\s*部署人形\s*", b.name):
                 return "deploy", b
-            if "撤回" in b.name:
+            if re.fullmatch(r"\s*撤回人形\s*", b.name):
                 return "withdraw", b
+        for b in boxes:
+            if "地格" in b.name or "拖拽" in b.name:
+                return "hint", b
         return None, None
+
+    def _choose_tile(self):
+        """
+        选中卡片后要点的地格：阵容没满就找空地格（蓝色地格里没站人的）；
+        满了就点编号最大的那个已上场单位所在的格子，让新人形顶替它。
+        """
+        count = self._deploy_count()
+        digits = [b for b in self.ocr(*MAP_BOX, match=re.compile(r"^\d$")) if 1 <= int(b.name) <= 6]
+        full = count is not None and count[0] >= count[1]
+        if not full:
+            tiles = find_tiles(self.frame, self.width, self.height)
+            free = empty_tiles(tiles, digits, self.height)
+            self.debug_shot("tiles", digits)
+            self.log_info(f"地格 {len(tiles)} 个，空的 {len(free)} 个，单位编号 {[d.name for d in digits]}", notify=False)
+            if free:
+                return free[0]["center"], "空地格"
+        if digits:
+            tag = max(digits, key=lambda b: int(b.name))
+            cx, cy = tag.x + tag.width / 2, tag.y + tag.height / 2 + 0.07 * self.height
+            return (cx, cy), f"{tag.name}号单位的格子"
+        return None, None
+
+    def _place_selected(self, label, before=None):
+        """
+        当前已选中一张卡片（我的人形或好友助战）：
+        按钮是「撤回人形」说明已在场上；是「请点击地格」就先点一个地格；然后点「部署人形」并确认。
+        :param before: 部署前的 (n, m) 计数，用来核对；None 时用按钮变成「撤回人形」核对
+        """
+        kind, button = self._deploy_button()
+        if kind == "withdraw":
+            self.log_info(f"{label} 已在场上", notify=True)
+            return True
+        if kind == "hint":
+            tile, desc = self._choose_tile()
+            if tile is None:
+                self.log_info(f"{label} 需要先点地格，但没找到可点的地格", notify=False)
+                return False
+            self.log_info(f"{label} 先点{desc}", notify=False)
+            self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=1)
+            self.next_frame()
+            kind, button = self._deploy_button()
+        if kind != "deploy":
+            self.log_info(f"{label} 没出现部署按钮，跳过", notify=False)
+            return False
+        self.click(button, after_sleep=1.5)
+        self.next_frame()
+        if confirm := self.ocr(match=self.fix_match_regex(["确认"]), box=self.box.bottom):
+            self.click(confirm, after_sleep=1.5)
+            self.next_frame()
+        kind, _ = self._deploy_button()
+        after = self._deploy_count()
+        if kind == "withdraw" or (before is not None and after is not None and after[0] > before[0]):
+            self.log_info(f"已部署 {label}，阵容 {after}", notify=True)
+            return True
+        self.log_info(f"{label} 点了部署但没确认上场", notify=False)
+        return False
 
     def borrow_support(self):
         """
@@ -353,25 +413,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return False
 
     def _deploy_selected_support(self, label):
-        """当前已选中一张助战卡片：按钮是「撤回」说明已在场上；是「部署」就点，确认上场后返回 True。"""
-        kind, button = self._deploy_button()
-        if kind == "withdraw":
-            self.log_info(f"{label} 助战已在场上", notify=True)
-            return True
-        if kind != "deploy":
-            self.log_info(f"选中 {label} 后没找到部署按钮，跳过", notify=False)
-            return False
-        self.click(button, after_sleep=1.5)
-        self.next_frame()
-        if confirm := self.ocr(match=self.fix_match_regex(["确认"]), box=self.box.bottom):
-            self.click(confirm, after_sleep=1.5)
-            self.next_frame()
-        kind, _ = self._deploy_button()
-        if kind == "withdraw":
-            self.log_info(f"已借 {label} 助战", notify=True)
-            return True
-        self.log_info(f"{label} 点了部署但没确认上场，换下一张", notify=False)
-        return False
+        return self._place_selected(f"助战 {label}")
 
     def _pick_strongest_support(self, tab):
         """兜底：切到「全部」筛选，按战力从高到低借第一个能部署的助战。"""
@@ -424,28 +466,11 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             x, y = card["center"]
             self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
             self.next_frame()
-            tiles = find_tiles(self.frame, self.width, self.height)
-            digits = self.ocr(*MAP_BOX, match=re.compile(r"^\d$"))
-            free = empty_tiles(tiles, digits, self.height)
-            self.debug_shot("lineup_tiles", digits)
-            self.log_info(f"补阵容: 选中战力 {card['power']}，地格 {len(tiles)} 个，空的 {len(free)} 个", notify=False)
-            placed = False
-            for tile in free:
-                tx, ty = tile["center"]
-                self.click_relative(tx / self.width, ty / self.height, after_sleep=0.8)
-                self.next_frame()
-                kind, button = self._deploy_button()
-                if kind != "deploy":
-                    continue
-                self.click(button, after_sleep=1.5)
-                self.next_frame()
-                new = self._deploy_count()
-                if new and new[0] > count[0]:
-                    count = new
-                    placed = True
-                    self.log_info(f"已部署战力 {card['power']} 的人形，阵容 {count[0]}/{count[1]}", notify=True)
-                    break
-            if not placed:
+            name = self._selected_role_name()
+            placed = self._place_selected(f"我的人形 {name}（战力 {card['power']}）", before=count)
+            if placed:
+                count = self._deploy_count() or (count[0] + 1, count[1])
+            else:
                 self.log_info(f"战力 {card['power']} 没能部署，换下一张", notify=False)
             if count[0] >= count[1]:
                 break
