@@ -23,24 +23,21 @@ def order_maps(maps, name_groups):
     return sorted(zip(maps, name_groups, strict=True), key=rank)
 
 
-def pick_candidate(ordered, done, locked, anchor=None):
+def pick_candidate(ordered, done, locked, cursor=None):
     """
     从排序后的 (map, name_group) 列表里挑下一个要点的关卡。
 
-    - 跳过已处理(done)和已判定未解锁(locked)的关卡
-    - anchor 为刚判定未解锁的关卡名：解锁它的前置只可能在它左边，所以只在它左边找，
-      取最靠近它的那个；anchor 不在屏幕上时退回最左边的可用关卡
+    - 跳过已处理(done)和本轮判定未解锁(locked)的关卡
+    - cursor 是进度游标：最近一次确认已通关或刚打完的关卡名。能走到这一关说明它左边的
+      都已通关，所以只在它右边找，取最靠左的那个。游标不在屏幕上时退回最左边的可用关卡
     - 返回 None 表示屏幕上没有可点的关卡
     """
     usable = [(m, g) for m, g in ordered if not (g & done) and not (g & locked)]
-    if not usable:
-        return None
-    if anchor:
-        anchor_box = next((m for m, g in ordered if anchor in g), None)
-        if anchor_box is not None:
-            left = [(m, g) for m, g in usable if m.x < anchor_box.x]
-            return left[-1] if left else None
-    return usable[0]
+    if cursor:
+        cursor_box = next((m for m, g in ordered if cursor in g), None)
+        if cursor_box is not None:
+            usable = [(m, g) for m, g in usable if m.x > cursor_box.x]
+    return usable[0] if usable else None
 
 
 class ClearMapTask(BaseGfTask):
@@ -100,8 +97,7 @@ class ClearMapTask(BaseGfTask):
         if not processors:
             processors = [None, self.make_hsv_isolator(hR.WHITE), self.make_hsv_isolator(hR.WHITE_GRAY)]
 
-        anchor = None  # 最近一次判定为未解锁的关卡名，下一步只往它左边找前置
-        last_scroll_leftmost = None  # 上次为了往左看而点击的最左卡片名，用来判断视野有没有真的移动
+        cursor = None  # 进度游标：最近一次确认已通关或刚打完的关卡名，只往它右边推
 
         while True:
             self.sleep(1)
@@ -131,22 +127,17 @@ class ClearMapTask(BaseGfTask):
                 self.log_info(f"推图完成, 共{count}个!", notify=True)
                 return
 
-            candidate = pick_candidate(ordered, done, locked, anchor)
+            # 游标左边的关卡一律视为已通关，不再回头点
+            cursor_box = next((m for m, g in ordered if cursor in g), None) if cursor else None
+            if cursor_box is not None:
+                for m, g in ordered:
+                    if m.x < cursor_box.x:
+                        done.update(g)
+
+            candidate = pick_candidate(ordered, done, locked, cursor)
             if candidate is None:
-                if anchor:
-                    # 前置关卡不在屏幕内。地图拖动对 PostMessage 无效，但点任意卡片后游戏会把它
-                    # 滚到屏幕左中位置，所以点最左边那张卡就能把视野往左挪。
-                    leftmost, leftmost_group = min(ordered, key=lambda item: item[0].x)
-                    leftmost_name = next(iter(leftmost_group))
-                    if leftmost_name != last_scroll_leftmost and leftmost.x < self.width * 0.45:
-                        last_scroll_leftmost = leftmost_name
-                        self.log_info(f"{anchor} 的前置关卡不在屏幕内, 点击 {leftmost_name} 把视野往左挪", notify=False)
-                        self.click(leftmost, after_sleep=1.5)
-                        self.close_map_panel()
-                        continue
-                    raise Exception(f"{anchor} 未解锁且屏幕左侧没有可推的前置关卡, 请手动把视野移到前置关卡再启动")
                 if locked:
-                    raise Exception(f"剩余关卡都未解锁({sorted(locked)}), 请手动把视野移到前置关卡再启动")
+                    raise Exception(f"剩余关卡都未解锁({sorted(locked)}), 请检查前置关卡后再启动")
                 self.log_info(f"推图完成, 共{count}个!", notify=True)
                 return
             current_map, name_group = candidate
@@ -171,16 +162,17 @@ class ClearMapTask(BaseGfTask):
                 continue
 
             if locked_hint:
-                self.log_info(f"{current_map.name} 未解锁, 往左找前置关卡", notify=False)
+                # 前置关卡在它左边且还没推，先跳过，推完别的关卡后重新判定
+                self.log_info(f"{current_map.name} 未解锁, 先推它左边的关卡", notify=False)
                 locked.update(name_group)
-                anchor = current_map.name
                 self.close_map_panel()
                 continue
 
             if not special_reward:
-                # 没有首通特殊奖励 = 已通关
+                # 没有首通特殊奖励 = 已通关，游标推进到这里
                 self.log_info(f"{current_map.name} 已通关, 跳过", notify=False)
                 done.update(name_group)
+                cursor = current_map.name
                 self.close_map_panel()
                 continue
 
@@ -188,7 +180,6 @@ class ClearMapTask(BaseGfTask):
             if not action:
                 self.log_info(f"{current_map.name} 面板没有挑战/观看按钮, 视为未解锁", notify=False)
                 locked.update(name_group)
-                anchor = current_map.name
                 self.close_map_panel()
                 continue
 
@@ -204,10 +195,9 @@ class ClearMapTask(BaseGfTask):
             else:
                 self.skip_dialogs(end_match=map_re)
             done.update(name_group)
-            # 推过一关后，之前未解锁的关卡可能已经解锁，重新从左往右判定
+            cursor = current_map.name
+            # 推过一关后，之前未解锁的关卡可能已经解锁，重新判定
             locked.clear()
-            anchor = None
-            last_scroll_leftmost = None
             self.close_map_panel()
 
     def close_map_panel(self):

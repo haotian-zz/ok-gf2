@@ -67,16 +67,16 @@ class TestPickCandidate(unittest.TestCase):
         self.assertEqual(pick_candidate(self.ordered, {"SL-3-1"}, {"3-1"})[0].name, "SL-3-2")
         self.assertIsNone(pick_candidate(self.ordered, {"SL-3-1", "SL-3-2", "3-2"}, {"3-1"}))
 
-    def test_locked_anchor_looks_left_nearest_first(self):
-        # 3-2 未解锁 -> 只看它左边，最靠近的 SL-3-2 优先
-        self.assertEqual(pick_candidate(self.ordered, set(), {"3-2"}, anchor="3-2")[0].name, "SL-3-2")
-        # SL-3-2 已处理 -> 再往左是 3-1
-        self.assertEqual(pick_candidate(self.ordered, {"SL-3-2"}, {"3-2"}, anchor="3-2")[0].name, "3-1")
-        # 左边全部处理完 -> None，调用方会拖动地图
-        self.assertIsNone(pick_candidate(self.ordered, {"SL-3-1", "3-1", "SL-3-2"}, {"3-2"}, anchor="3-2"))
+    def test_cursor_only_moves_right(self):
+        # 3-1 已通关作为游标 -> 它左边的 SL-3-1 不再考虑，下一张是右边的 SL-3-2
+        self.assertEqual(pick_candidate(self.ordered, {"3-1"}, set(), cursor="3-1")[0].name, "SL-3-2")
+        # SL-3-2 未解锁 -> 跳过它继续往右
+        self.assertEqual(pick_candidate(self.ordered, {"3-1"}, {"SL-3-2"}, cursor="3-1")[0].name, "3-2")
+        # 右边都处理完 -> None
+        self.assertIsNone(pick_candidate(self.ordered, {"3-1", "3-2"}, {"SL-3-2"}, cursor="3-1"))
 
-    def test_anchor_not_visible_falls_back_to_leftmost(self):
-        self.assertEqual(pick_candidate(self.ordered, set(), set(), anchor="3-9")[0].name, "SL-3-1")
+    def test_cursor_not_visible_falls_back_to_leftmost(self):
+        self.assertEqual(pick_candidate(self.ordered, set(), set(), cursor="3-9")[0].name, "SL-3-1")
 
     def test_group_partial_overlap_counts(self):
         ordered = [(Box(100, 0, 1, 1, name="2-5"), {"2-5", "2-5*"})]
