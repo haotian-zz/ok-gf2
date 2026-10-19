@@ -266,6 +266,7 @@ class TestSupportSelect(unittest.TestCase):
         self.assertEqual(cards[0]["avatar"].shape, (54, 52, 3))
 
     def test_avatar_book_learn(self):
+        import os
         import tempfile
 
         import numpy as np
@@ -274,11 +275,19 @@ class TestSupportSelect(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             book = AvatarBook(d)
-            crop = np.random.randint(0, 255, (54, 52, 3), dtype=np.uint8)
+            rng = np.random.default_rng(0)
+            crop = rng.integers(0, 255, (54, 52, 3), dtype=np.uint8)
             self.assertFalse(book.learn("Lv.60", crop))
             self.assertTrue(book.learn("春田", crop))
-            self.assertFalse(book.learn("春田", crop))
-            self.assertEqual(AvatarBook(d).match(crop)[0], "春田")
+            self.assertFalse(book.learn("春田", crop))  # 同一张立绘不重复存
+            skin = rng.integers(0, 255, (54, 52, 3), dtype=np.uint8)
+            self.assertTrue(book.learn("春田", skin))  # 换皮肤的立绘另存一张
+            self.assertFalse(book.learn("春田", skin))
+            self.assertEqual(sorted(os.listdir(d)), ["春田.png", "春田_2.png"])
+            fresh = AvatarBook(d)
+            self.assertEqual(fresh.match(crop)[0], "春田")
+            self.assertEqual(fresh.match(skin)[0], "春田")
+            self.assertEqual(len(fresh.load()["春田"]), 2)
 
     def test_find_deploy_tiles(self):
         import cv2

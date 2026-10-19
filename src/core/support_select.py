@@ -301,28 +301,34 @@ def _imwrite_any(path, img):
     return ok
 
 
+_variant_re = re.compile(r"^(.+?)(?:_(\d+))?$")
+AVATAR_MAX_VARIANTS = 8
+
+
 class AvatarBook:
     """
-    assets/card_avatars/<人形名>.png：每个人形一张卡片立绘模板。
-    第一次见到某张卡片时点一下、OCR 左下角名字并自动存模板；以后扫描卡片直接比对立绘就知道是谁，不用再点。
+    assets/card_avatars/<人形名>.png：每个人形的卡片立绘模板。
+    同一个人形换了皮肤立绘就不一样，所以一个名字可以有多张模板：<人形名>.png、<人形名>_2.png、<人形名>_3.png……
+    第一次见到某张卡片时点一下、OCR 左下角名字并自动存模板；名字已有模板但这张立绘都不像，就当新皮肤再存一张。
     """
 
     def __init__(self, folder=AVATAR_DIR, threshold=AVATAR_THRESHOLD):
         self.folder = folder
         self.threshold = threshold
-        self.templates = None
+        self.templates = None  # 名字 -> [模板, ...]
 
     def load(self):
         if self.templates is None:
             self.templates = {}
             if os.path.isdir(self.folder):
-                for fn in os.listdir(self.folder):
+                for fn in sorted(os.listdir(self.folder)):
                     stem, ext = os.path.splitext(fn)
                     if ext.lower() != ".png":
                         continue
                     img = _imread_any(os.path.join(self.folder, fn))
                     if img is not None and img.shape[:2] == (AVATAR_REF[1], AVATAR_REF[0]):
-                        self.templates[stem] = img
+                        name = _variant_re.match(stem).group(1)
+                        self.templates.setdefault(name, []).append(img)
         return self.templates
 
     def match(self, crop):
@@ -330,23 +336,35 @@ class AvatarBook:
         best, best_score = None, -1.0
         if crop is None:
             return None, 0.0
-        for name, tpl in self.load().items():
-            score = float(cv2.matchTemplate(crop, tpl, cv2.TM_CCOEFF_NORMED).max())
-            if score > best_score:
-                best, best_score = name, score
+        for name, tpls in self.load().items():
+            for tpl in tpls:
+                score = float(cv2.matchTemplate(crop, tpl, cv2.TM_CCOEFF_NORMED).max())
+                if score > best_score:
+                    best, best_score = name, score
         if best_score < self.threshold:
             return None, best_score
         return best, best_score
 
     def learn(self, name, crop):
-        """名字合法且还没有模板时存一张；返回是否新存。"""
+        """名字合法时存模板：没见过的名字存 <名字>.png；名字有了但这张立绘和已有模板都不像（新皮肤）就存 <名字>_n.png。返回是否新存。"""
         if crop is None or not name or not _name_ok.match(name):
             return False
-        if name in self.load():
-            return False
+        have = self.load().get(name, [])
+        if have:
+            if any(float(cv2.matchTemplate(crop, tpl, cv2.TM_CCOEFF_NORMED).max()) >= self.threshold for tpl in have):
+                return False
+            if len(have) >= AVATAR_MAX_VARIANTS:
+                return False
         os.makedirs(self.folder, exist_ok=True)
-        if _imwrite_any(os.path.join(self.folder, f"{name}.png"), crop):
-            self.templates[name] = crop.copy()
+        n = len(have) + 1
+        while True:
+            fn = f"{name}.png" if n == 1 else f"{name}_{n}.png"
+            path = os.path.join(self.folder, fn)
+            if not os.path.exists(path):
+                break
+            n += 1
+        if _imwrite_any(path, crop):
+            self.templates.setdefault(name, []).append(crop.copy())
             return True
         return False
 
