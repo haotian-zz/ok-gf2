@@ -4,11 +4,9 @@ from ok import Logger
 
 from src.core.BaseGfTask import BaseGfTask, map_re
 from src.image.hsv_config import HSVRange as hR
-from src.tasks.clear_map_progress import ProgressStore
 
 logger = Logger.get_logger(__name__)
 
-chapter_re = re.compile(r"\d+\.\d+\S*")
 
 
 def canonical_name(name_group):
@@ -48,8 +46,6 @@ class ClearMapTask(BaseGfTask):
                 "普通OCR": True,
                 "除杂色OCR1": True,
                 "除杂色OCR2": True,
-                "难度": "普通",
-                "使用本地通关记录": True,
                 "战斗内点击自动": False,
                 "自动使用体力药": False,
                 "借好友助战": False,
@@ -72,11 +68,6 @@ class ClearMapTask(BaseGfTask):
                     "除杂色OCR2（宽松白灰色）：同时保留白色与浅灰色区域后再识别\n"
                     "适用场景：关卡卡片文字为白色或浅灰色，或普通OCR/除杂色OCR1均无法识别时"
                 ),
-                "难度": "当前推的难度（普通/困难），只用来区分本地通关记录，不会去切换游戏内的难度",
-                "使用本地通关记录": (
-                    "核实过已通关的关卡写入 configs/clear_map_progress.json，下次直接跳过不再点开\n"
-                    "记录不对时删掉该文件或关闭此项重新核实"
-                ),
                 "战斗内点击自动": (
                     "进入战斗后若检测到「行动结束」，自动点击右上角的自动战斗按钮\n"
                     "默认关闭，依赖游戏内全局自动（设置→其他→自动战斗设置）；未开全局自动时再打开"
@@ -97,8 +88,6 @@ class ClearMapTask(BaseGfTask):
                 ),
             }
         )
-        self.progress = None
-        self.progress_key = "unknown"
         self.processors = []
 
     # ------------------------------------------------------------------ 扫描
@@ -113,12 +102,6 @@ class ClearMapTask(BaseGfTask):
         self.log_debug(f"maps: {[m for m, _ in ordered]}")
         self.debug_shot("scan", [m for m, _ in ordered])
         return ordered
-
-    def read_chapter_key(self):
-        """用顶部章节标题 + 难度做本地记录的键，例如 3.0缺位拟合|普通。"""
-        title = self.ocr(box=self.box.top, match=chapter_re, log=True)
-        chapter = title[0].name.lstrip("/ ") if title else "unknown"
-        return f"{chapter}|{self.config.get('难度', '普通')}"
 
     # ------------------------------------------------------------------ 面板
     def inspect_card(self, card, name):
@@ -157,15 +140,6 @@ class ClearMapTask(BaseGfTask):
         if self.ocr(box="right", match=[re.compile("推荐等级"), "挑战目标", "特殊奖励", "敌方单位"]):
             self.back(after_sleep=1.5)
 
-    def record_cleared(self, name):
-        if self.progress is not None and name and self.progress.mark(self.progress_key, name):
-            self.log_info(f"记录 {name} 已通关", notify=False)
-
-    def known_cleared(self):
-        if self.progress is None:
-            return set()
-        return self.progress.cleared(self.progress_key)
-
     # ------------------------------------------------------------------ 主流程
     def run(self):
         processors = []
@@ -179,9 +153,7 @@ class ClearMapTask(BaseGfTask):
             processors = [None, self.make_hsv_isolator(hR.WHITE), self.make_hsv_isolator(hR.WHITE_GRAY)]
         self.processors = processors
 
-        self.progress = ProgressStore() if self.config.get("使用本地通关记录", True) else None
-        self.progress_key = self.read_chapter_key()
-        self.log_info(f"推图开始, 记录键: {self.progress_key}, 已记录通关 {len(self.known_cleared())} 关", notify=False)
+        self.log_info("推图开始", notify=False)
 
         ordered = self.scan_maps()
         if not ordered:
@@ -189,13 +161,13 @@ class ClearMapTask(BaseGfTask):
 
         self.go_to_chapter_start()
         count = self.sweep_right()
-        self.log_info(f"推图完成, 本次推进 {count} 关, 记录已通关 {len(self.known_cleared())} 关", notify=True)
+        self.log_info(f"推图完成, 本次推进 {count} 关", notify=True)
 
     def go_to_chapter_start(self):
         """
         点屏幕最左边的卡片把视野往左挪，直到最左的卡片不再变化（到达章节起点）。
         地图拖动对 PostMessage 无效，但点任意卡片后游戏会把它滚到屏幕左中位置。
-        顺便把路过的卡片状态记下来。
+        路过的卡片顺便核实一下状态。
         """
         self.info_set("current_task", "回到章节起点")
         prev = None
@@ -208,12 +180,7 @@ class ClearMapTask(BaseGfTask):
             if name == prev or leftmost.x >= self.width * 0.45:
                 return
             prev = name
-            if name in self.known_cleared():
-                self.click(leftmost, after_sleep=1.5)
-            else:
-                status, _ = self.inspect_card(leftmost, name)
-                if status == "cleared":
-                    self.record_cleared(name)
+            self.inspect_card(leftmost, name)
             self.close_map_panel()
 
     def sweep_right(self):
@@ -231,7 +198,7 @@ class ClearMapTask(BaseGfTask):
             if not ordered:
                 raise Exception("选关页面上没有识别到关卡, 请检查游戏画面")
 
-            skip = self.known_cleared() | session_done | locked
+            skip = session_done | locked
             candidate = pick_candidate(ordered, skip, cursor)
             if candidate is None:
                 # 屏幕右边没有可处理的了：点最右边的卡片把视野往右挪，看看还有没有更多关卡
@@ -263,7 +230,6 @@ class ClearMapTask(BaseGfTask):
             if status == "cleared":
                 self.log_info(f"{name} 已通关, 跳过", notify=False)
                 session_done.update(group)
-                self.record_cleared(name)
                 cursor = name
                 self.close_map_panel()
                 continue
@@ -280,7 +246,6 @@ class ClearMapTask(BaseGfTask):
                 self.skip_dialogs(end_match=map_re)
             count += 1
             session_done.update(group)
-            self.record_cleared(name)
             cursor = name
             locked.clear()  # 推过一关后，之前未解锁的关卡可能已经解锁
             last_scroll = None

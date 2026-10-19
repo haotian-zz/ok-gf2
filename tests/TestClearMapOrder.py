@@ -1,4 +1,4 @@
-"""推图关卡排序、候选选择、本地通关记录与调试截图的纯逻辑测试，不依赖设备与 ok-script 运行时。"""
+"""推图关卡排序、候选选择、体力弹窗、助战选人与调试截图的纯逻辑测试，不依赖设备与 ok-script 运行时。"""
 
 import os
 import sys
@@ -29,7 +29,6 @@ from src.core.support_select import (
     make_check_frame,
     pick_candidates,
 )
-from src.tasks.clear_map_progress import ProgressStore
 from src.tasks.ClearMapTask import canonical_name, merge_maps, order_maps, pick_candidate
 
 
@@ -93,28 +92,6 @@ class TestPickCandidate(unittest.TestCase):
     def test_group_partial_overlap_counts(self):
         ordered = [(Box(100, 0, 1, 1, name="2-5"), {"2-5", "2-5*"})]
         self.assertIsNone(pick_candidate(ordered, {"2-5*"}))
-
-
-class TestProgressStore(unittest.TestCase):
-    def test_mark_persist_reload(self):
-        with tempfile.TemporaryDirectory() as root:
-            path = os.path.join(root, "configs", "clear_map_progress.json")
-            store = ProgressStore(path)
-            self.assertFalse(store.is_cleared("3.0缺位拟合|普通", "3-1"))
-            self.assertTrue(store.mark("3.0缺位拟合|普通", "3-1"))
-            self.assertFalse(store.mark("3.0缺位拟合|普通", "3-1"))  # 重复不再新增
-            store.mark("3.0缺位拟合|普通", "SL-3-1")
-            reloaded = ProgressStore(path)
-            self.assertEqual(reloaded.cleared("3.0缺位拟合|普通"), {"3-1", "SL-3-1"})
-            self.assertEqual(reloaded.cleared("3.0缺位拟合|困难"), set())
-
-    def test_corrupt_file_is_ignored(self):
-        with tempfile.TemporaryDirectory() as root:
-            path = os.path.join(root, "p.json")
-            Path(path).write_text("not json", encoding="utf-8")
-            store = ProgressStore(path)
-            self.assertEqual(store.cleared("x"), set())
-            self.assertTrue(store.mark("x", "1-1"))
 
 
 class TestLoadingFrame(unittest.TestCase):
