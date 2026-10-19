@@ -420,11 +420,17 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if kind != "deploy":
             self.log_info(f"{label} 没出现部署按钮，跳过", notify=False)
             return False
-        self.click(button, after_sleep=1.5)
-        self.next_frame()
-        if confirm := self.ocr(match=self.fix_match_regex(["确认"]), box=self.box.bottom):
-            self.click(confirm, after_sleep=1.5)
+        for attempt in range(2):
+            # 偶尔第一下「部署人形」点了没反应（按钮还是部署人形），等一下再点一次
+            self.click(button, after_sleep=1.5)
             self.next_frame()
+            if confirm := self.ocr(match=self.fix_match_regex(["确认"]), box=self.box.bottom):
+                self.click(confirm, after_sleep=1.5)
+                self.next_frame()
+            kind, button = self._deploy_button()
+            if kind != "deploy":
+                break
+            self.log_info(f"{label} 点了部署人形没反应，再点一次", notify=False)
         if self._placed(card_name, before):
             self.log_info(f"已部署 {label}，阵容 {self._deploy_count()}", notify=True)
             return True
