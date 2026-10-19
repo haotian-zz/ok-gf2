@@ -987,7 +987,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             raise_if_not_found=False,
         )
         self.debug_shot("battle_entry", result)
-        if result and result[0].name != "继续前进":
+        if not result:
+            raise Exception("2 分钟内没进入部署界面（没等到作战开始/行动结束/继续前进），已停止，看 battle_entry 截图")
+        if result[0].name != "继续前进":
             self._continue_streak = 0
         if result and result[0].name == "继续前进":
             self.log_info("开局检测到继续前进，点击后开启新一轮自动战斗", notify=True)
