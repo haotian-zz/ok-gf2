@@ -19,6 +19,7 @@ from src.core.support_select import (
     find_cards,
     find_tiles,
     is_orange_check,
+    merge_tiles,
     order_tiles,
     pick_candidates,
     read_badge,
@@ -288,15 +289,19 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         """
         count = self._deploy_count()
         digits = [b for b in self.ocr(*MAP_BOX, match=re.compile(r"^\d$")) if 1 <= int(b.name) <= 6]
-        tiles = find_tiles(self.frame, self.width, self.height)
+        bright = find_tiles(self.frame, self.width, self.height, strict=True)
+        loose = find_tiles(self.frame, self.width, self.height)
         self.debug_shot("tiles", digits)
         out = []
         if count is not None and count[0] >= count[1] and digits:
             tag = max(digits, key=lambda b: int(b.name))
             out.append(((tag.x + tag.width / 2, tag.y + tag.height / 2 + 0.07 * self.height), f"{tag.name}号单位的格子"))
-        for t in order_tiles(tiles, digits, self.height):
+        ordered = merge_tiles(order_tiles(bright, digits, self.height), order_tiles(loose, digits, self.height))
+        for t in ordered:
             out.append((t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])}, 饱和度 {int(t.get('sat', 0))})"))
-        self.log_info(f"阵容 {count}，地格 {len(tiles)} 个，单位编号 {[d.name for d in digits]}", notify=False)
+        self.log_info(
+            f"阵容 {count}，亮蓝地格 {len(bright)} 个，泛蓝地格 {len(loose)} 个，单位编号 {[d.name for d in digits]}", notify=False
+        )
         return out[:8]
 
     def _place_selected(self, label, before=None, reselect=None):

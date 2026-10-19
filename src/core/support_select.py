@@ -179,24 +179,30 @@ def read_badge(frame, power_box, width, height, templates=None):
 
 
 # ------------------------------------------------------------------ 地格
-def find_tiles(frame, width, height):
+TILE_LOOSE = ((85, 30, 120), (125, 255, 255))  # 泛蓝的地格（含已站人的、颜色淡的）
+TILE_STRICT = ((90, 90, 200), (125, 255, 255))  # 高亮的亮蓝地格，通常是选中卡片后可部署的空格
+
+
+def find_tiles(frame, width, height, strict=False):
     """
-    地图上可部署的蓝色地格（含已站人的），返回 [{"center": (x, y), "bbox": (x, y, w, h)}, ...]，先上后下、先左后右。
+    地图上的蓝色地格，返回 [{"center": (x, y), "bbox": (x, y, w, h), "sat": 平均饱和度}, ...]，先上后下、先左后右。
+    strict=True 只取高亮的亮蓝地格。
     """
     if frame is None:
         return []
+    lo, hi = TILE_STRICT if strict else TILE_LOOSE
     x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
     region = frame[y0:y1, x0:x1]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     # 地格之间是白色细边（饱和度很低），不做闭运算，否则相邻地格会连成一块
-    mask = cv2.inRange(hsv, (85, 30, 150), (115, 200, 255))
+    mask = cv2.inRange(hsv, lo, hi)
     n, _, stats, cents = cv2.connectedComponentsWithStats(mask)
     s = height / 768
     tiles = []
     for i in range(1, n):
         area = stats[i, cv2.CC_STAT_AREA]
         bx, by, bw, bh = stats[i, :4]
-        if area < 800 * s * s or not (80 * s <= bw <= 190 * s) or not (50 * s <= bh <= 140 * s):
+        if area < 800 * s * s or not (60 * s <= bw <= 260 * s) or not (40 * s <= bh <= 200 * s):
             continue
         cx, cy = x0 + bx + bw / 2, y0 + by + bh / 2
         comp = mask[by : by + bh, bx : bx + bw] > 0
@@ -204,6 +210,15 @@ def find_tiles(frame, width, height):
         tiles.append({"center": (cx, cy), "bbox": (x0 + bx, y0 + by, int(bw), int(bh)), "sat": sat})
     tiles.sort(key=lambda t: (t["center"][1], t["center"][0]))
     return tiles
+
+
+def merge_tiles(primary, secondary, min_dist=40):
+    """primary 在前，secondary 里离 primary 任一中心不足 min_dist 的去重。"""
+    out = list(primary)
+    for t in secondary:
+        if all((t["center"][0] - o["center"][0]) ** 2 + (t["center"][1] - o["center"][1]) ** 2 >= min_dist**2 for o in out):
+            out.append(t)
+    return out
 
 
 def order_tiles(tiles, digit_boxes, height):
