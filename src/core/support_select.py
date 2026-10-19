@@ -79,10 +79,14 @@ def is_orange_check(frame, x, y, radius=5, ratio=0.4):
     return float(orange.mean()) >= ratio
 
 
-def filter_point(tab_box, attr, width, height):
-    """属性筛选图标的点击位置；属性不在表里就点「全部」。"""
+MY_TAB_FILTER_DY = 0.0625  # 「我的人形」页签多一行「使用整备室配置」，筛选图标整体下移
+
+
+def filter_point(tab_box, attr, width, height, my_tab=False):
+    """属性筛选图标的点击位置；属性不在表里就点「全部」。my_tab=True 表示在「我的人形」页签。"""
     _, ty = _center(tab_box)
-    return FILTER_X.get(attr, FILTER_X["全部"]) * width, ty + FILTER_DY * height
+    dy = FILTER_DY + (MY_TAB_FILTER_DY if my_tab else 0)
+    return FILTER_X.get(attr, FILTER_X["全部"]) * width, ty + dy * height
 
 
 def pick_candidates(cards, min_badge):

@@ -465,7 +465,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         boxes = self._ocr_panel(BUTTON_BOX)
         self.log_info(f"右下角按钮: {[b.name for b in boxes]}", notify=False)
         for b in boxes:
-            if re.fullmatch(r"\s*部署人形\s*", b.name):
+            if re.fullmatch(r"\s*(部署人形|编入队伍)\s*", b.name):
+                # 低等级人形的按钮叫「编入队伍」，作用一样
                 return "deploy", b
             if re.fullmatch(r"\s*撤回人形\s*", b.name):
                 return "withdraw", b
@@ -594,6 +595,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         role = self.config.get("助战角色", "威玛西娜").strip()
         min_badge = int(self.config.get("助战最低椎数", 6))
         self.info_set("current_task", "borrow_support")
+        self._borrowed_support = None
         self.next_frame()
         if not self.ocr(match="作战开始", box=self.box.bottom):
             self.log_info("不在部署界面，跳过借助战", notify=False)
@@ -688,8 +690,13 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.log_info("不借，直接开战", notify=True)
         return False
 
+    _borrowed_support = None
+
     def _deploy_selected_support(self, label, card_name, reselect):
-        return self._place_selected(f"助战 {label}", card_name, reselect=reselect)
+        ok = self._place_selected(f"助战 {label}", card_name, reselect=reselect)
+        if ok:
+            self._borrowed_support = card_name
+        return ok
 
     def _reselect_card(self, tab, x, y):
         """切回页签再点卡片（点过地图单位后面板会跳回「我的人形」）。"""
@@ -752,7 +759,10 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if not self._ensure_panel():
             self.log_info("打不开部署面板，跳过补满阵容", notify=True)
             return False
-        self._click_tab("我的人形")
+        tab = self._click_tab("我的人形")
+        # 属性筛选和好友助战页签是共用的，借完助战后这里可能还停在某个属性上，先点「全部」
+        fx, fy = filter_point(tab, "全部", self.width, self.height, my_tab=True)
+        self.click_relative(fx / self.width, fy / self.height, after_sleep=0.8)
         self.sleep(0.5)
         tried = set()
         for _ in range(max_rounds):
@@ -763,6 +773,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 for c in cards
                 if c["power"] not in tried and not is_orange_check(self.frame, *check_point(c, self.width, self.height))
             ]
+            if self._borrowed_support:
+                # 和场上助战同名的自己人形不能再上（点它按钮会变成撤回助战）
+                spare = [c for c in spare if not (c["name"] and self._name_like(c["name"], self._borrowed_support))]
             if not spare:
                 self.log_info("我的人形里没有可补的卡片了", notify=False)
                 break

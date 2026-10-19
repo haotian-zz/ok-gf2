@@ -288,6 +288,12 @@ class TestSupportSelect(unittest.TestCase):
         self.assertFalse(is_orange_check(frame, *check_point(cards[3], self.W, self.H)))
         self.assertFalse(is_orange_check(None, x, y))
 
+    def test_filter_point_my_tab_lower(self):
+        tab = Box(950, 20, 100, 30)
+        _, y1 = filter_point(tab, "全部", 1280, 768)
+        _, y2 = filter_point(tab, "全部", 1280, 768, my_tab=True)
+        self.assertAlmostEqual(y2 - y1, 0.0625 * 768, places=3)
+
     def test_filter_point(self):
         tab = Box(1100, 22, 110, 16, name="好友助战")
         x, y = filter_point(tab, "物理", self.W, self.H)
