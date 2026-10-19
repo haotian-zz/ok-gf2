@@ -342,31 +342,49 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         _, empty = self._occupied_and_empty()
         return not empty
 
+    _own_deployed = ()
+
     def _make_room(self):
-        """阵容满时，到我的人形里把战力最低的已上场人形撤回，给助战腾一个位置。返回是否腾出了位置。"""
+        """
+        阵容满时给助战腾一个位置：逐个点地图上有人的地格（点中后右下角是「撤回人形」、左下角是名字），
+        优先撤回不在我方已上场名单里的那个（上一关借的助战），否则撤回我方战力最低的。返回是否腾出了位置。
+        """
         if not self._lineup_full():
             return True
-        self._click_tab("我的人形")
-        self.sleep(0.5)
+        own = {c["name"]: c["power"] for c in self._own_deployed if c.get("name")}
+        found = []
+        for tile, desc in self._unit_tiles():
+            self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=0.8)
+            self.next_frame()
+            name = self._selected_role_name()
+            kind, _ = self._deploy_button()
+            if kind == "withdraw" and name:
+                found.append((tile, name))
+            self._clear_selection()
+        if not found:
+            self.debug_shot("make_room_fail")
+            self.log_info("阵容已满，但在地图上没点中任何可撤回的单位，助战只能试着顶替", notify=True)
+            return False
+
+        def order(item):
+            powers = [p for n, p in own.items() if self._name_like(n, item[1])]
+            return (1, min(powers)) if powers else (0, 0)
+
+        found.sort(key=order)
+        tile, name = found[0]
+        self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=0.8)
         self.next_frame()
-        cards = self._scan_cards()
-        deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
-        deployed.sort(key=lambda c: c["power"])
-        for c in deployed:
-            name = self._click_card(c)
-            kind, button = self._deploy_button()
-            if kind != "withdraw":
-                if not self._select_unit_on_map(name):
-                    continue
-                kind, button = self._deploy_button()
-            if kind == "withdraw":
-                self.log_info(f"阵容已满，撤回战力最低的 {name}（{c['power']}）给助战腾位", notify=True)
-                self.click(button, after_sleep=1)
-                self.next_frame()
-                self.debug_shot("room_made")
-                return True
-        self.log_info("阵容已满但没撤回成功，助战只能试着顶替", notify=True)
-        return False
+        kind, button = self._deploy_button()
+        if kind != "withdraw":
+            self._clear_selection()
+            self.log_info(f"阵容已满，重新点中 {name} 失败，助战只能试着顶替", notify=True)
+            return False
+        why = "上一关借的助战" if order((tile, name))[0] == 0 else "我方战力最低"
+        self.log_info(f"阵容已满，撤回{why}的 {name} 给助战腾位", notify=True)
+        self.click(button, after_sleep=1)
+        self.next_frame()
+        self.debug_shot("room_made")
+        return True
 
     def _deploy_count(self):
         """顶部「部署人形 3/4」，返回 (3, 4)；读不到就换一帧再试一次，还读不到返回 None。"""
@@ -572,6 +590,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
         self.debug_shot("support_my_tab", [c["power_box"] for c in deployed])
         self.log_info(f"我的人形已上场 {len(deployed)} 张卡片 {[(c['name'], c['power']) for c in deployed]}", notify=False)
+        self._own_deployed = tuple(deployed)
         if not any(c["name"] is None or self._name_like(c["name"], role) for c in deployed):
             return False
         for c in deployed:
