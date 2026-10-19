@@ -344,6 +344,32 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
     _own_deployed = ()
 
+    def _withdraw_old_support(self, role):
+        """
+        场上同时只能有一个助战：上一关借的助战还在场上时，必须先撤回才能借别的。
+        逐个点地图上有人的地格，名字不在我方已上场名单里的就是助战：
+        是目标角色就保留（返回 "keep"），不是就点「撤回人形」（返回 "withdrawn"）；场上没有助战返回 None。
+        """
+        own_names = [c["name"] for c in self._own_deployed if c.get("name")]
+        for tile, desc in self._unit_tiles():
+            self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=0.8)
+            self.next_frame()
+            name = self._selected_role_name()
+            kind, button = self._deploy_button()
+            if kind != "withdraw" or not name or any(self._name_like(n, name) for n in own_names):
+                self._clear_selection()
+                continue
+            if role in name:
+                self.log_info(f"场上已有助战 {name}，保留不换", notify=True)
+                self._clear_selection()
+                return "keep"
+            self.log_info(f"场上已有上一关借的助战 {name}，先撤回再换", notify=True)
+            self.click(button, after_sleep=1)
+            self.next_frame()
+            self.debug_shot("old_support_withdrawn")
+            return "withdrawn"
+        return None
+
     def _make_room(self):
         """
         阵容满时给助战腾一个位置：逐个点地图上有人的地格（点中后右下角是「撤回人形」、左下角是名字），
@@ -577,6 +603,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             return False
         try:
             self._withdraw_own(role)
+            if self._withdraw_old_support(role) == "keep":
+                return True
             return self._pick_friend_support(role, min_badge)
         finally:
             self.next_frame()
@@ -589,6 +617,10 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         cards = self._scan_cards()
         deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
         self.debug_shot("support_my_tab", [c["power_box"] for c in deployed])
+        for c in deployed:
+            if c["name"] is None:
+                # 立绘没认出来的，点一下读名字（顺便学会），保证我方已上场名单完整，后面才能分辨谁是助战
+                c["name"] = self._click_card(c) or None
         self.log_info(f"我的人形已上场 {len(deployed)} 张卡片 {[(c['name'], c['power']) for c in deployed]}", notify=False)
         self._own_deployed = tuple(deployed)
         if not any(c["name"] is None or self._name_like(c["name"], role) for c in deployed):
