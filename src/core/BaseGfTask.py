@@ -262,10 +262,32 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return tab[0]
 
     def _selected_role_name(self):
+        """左下角当前选中人形的名字，去掉等级后缀，如 '莱娅Lv.60格' -> '莱娅'。"""
         boxes = self._ocr_panel(NAME_BOX)
-        name = "".join(b.name for b in boxes)
-        self.log_info(f"左下角人形名: {name!r}", notify=False)
+        raw = "".join(b.name for b in boxes)
+        name = re.split(r"L[vV]", raw)[0].strip()
+        self.log_info(f"左下角人形名: {raw!r} -> {name!r}", notify=False)
         return name
+
+    def _unit_tiles(self):
+        """地图上已上场单位所在的格子：先按编号标签（点编号下方），再按泛蓝地格兜底。"""
+        digits = [b for b in self.ocr(*MAP_BOX, match=re.compile(r"^\d$")) if 1 <= int(b.name) <= 6]
+        out = [((b.x + b.width / 2, b.y + b.height / 2 + 0.07 * self.height), f"{b.name}号单位") for b in digits]
+        tiles = find_tiles(self.frame, self.width, self.height)
+        for t in order_tiles(tiles, [], self.height):
+            if all((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 >= 40**2 for (x, y), _ in out):
+                out.append((t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])})"))
+        return out[:8]
+
+    def _select_unit_on_map(self, want):
+        """点地图上的单位格子，直到左下角名字是 want。点中单位后右侧面板会切回「我的人形」。"""
+        for tile, desc in self._unit_tiles():
+            self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=0.8)
+            self.next_frame()
+            if want in self._selected_role_name() and self._deploy_button()[0] == "withdraw":
+                self.log_info(f"在地图上选中了 {want}（{desc}）", notify=False)
+                return True
+        return False
 
     def _deploy_button(self):
         """右下角按钮：("deploy", box) 部署人形 / ("withdraw", box) 撤回人形 / ("hint", box) 请点击地格 / (None, None)。"""
@@ -304,15 +326,27 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         )
         return out[:8]
 
-    def _place_selected(self, label, before=None, reselect=None):
+    def _placed(self, card_name, before):
+        """核对是否上场：按钮是「撤回人形」且左下角名字就是这张卡，或者计数涨了。"""
+        kind, _ = self._deploy_button()
+        if kind == "withdraw" and card_name and card_name in self._selected_role_name():
+            return True
+        after = self._deploy_count()
+        return before is not None and after is not None and after[0] > before[0]
+
+    def _place_selected(self, label, card_name, before=None, reselect=None):
         """
-        当前已选中一张卡片（我的人形或好友助战）：
-        按钮是「撤回人形」说明已在场上；是「请点击地格」就逐个试点地格，直到出现「部署人形」；然后点部署并确认。
-        :param before: 部署前的 (n, m) 计数，用来核对；None 时用按钮变成「撤回人形」核对
-        :param reselect: 重新选中这张卡片的函数；点到已有人的格子会把选中切到那个单位，试下一个格子前要重选
+        当前已选中一张卡片（我的人形或好友助战），把它放到场上：
+        - 按钮已是「撤回人形」且左下角名字就是它：已在场上；
+        - 「请点击地格」：逐个试点地格。点到空格会出现「部署人形」再点一下；
+          阵容满时点有人的格子会直接顶替（按钮变「撤回人形」且名字变成它）；
+          点到别的单位只是选中了那个单位，面板会切回「我的人形」，所以试下一个格子前要用 reselect 重新选卡。
+        :param card_name: 这张卡的名字，用来核对是否真的上场
+        :param before: 部署前的 (n, m) 计数
+        :param reselect: 重新选中这张卡片的函数（含切回对应页签）
         """
         kind, button = self._deploy_button()
-        if kind == "withdraw":
+        if kind == "withdraw" and card_name in self._selected_role_name():
             self.log_info(f"{label} 已在场上", notify=True)
             return True
         if kind == "hint":
@@ -324,15 +358,15 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 if i > 0 and reselect:
                     reselect()
                     self.next_frame()
-                    kind, button = self._deploy_button()
-                    if kind == "deploy":
-                        break
                 self.log_info(f"{label} 试点{desc}", notify=False)
                 self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=1)
                 self.next_frame()
                 kind, button = self._deploy_button()
                 if kind == "deploy":
                     break
+                if kind == "withdraw" and card_name in self._selected_role_name():
+                    self.log_info(f"已顶替上场 {label}，阵容 {self._deploy_count()}", notify=True)
+                    return True
         if kind != "deploy":
             self.log_info(f"{label} 没出现部署按钮，跳过", notify=False)
             return False
@@ -341,10 +375,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if confirm := self.ocr(match=self.fix_match_regex(["确认"]), box=self.box.bottom):
             self.click(confirm, after_sleep=1.5)
             self.next_frame()
-        kind, _ = self._deploy_button()
-        after = self._deploy_count()
-        if kind == "withdraw" or (before is not None and after is not None and after[0] > before[0]):
-            self.log_info(f"已部署 {label}，阵容 {after}", notify=True)
+        if self._placed(card_name, before):
+            self.log_info(f"已部署 {label}，阵容 {self._deploy_count()}", notify=True)
             return True
         self.log_info(f"{label} 点了部署但没确认上场", notify=False)
         return False
@@ -386,12 +418,19 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             if role not in name:
                 continue
             kind, button = self._deploy_button()
+            if kind != "withdraw":
+                # 点卡片只是选中卡片，撤回要先在地图上点中这个单位
+                if not self._select_unit_on_map(role):
+                    self.log_info(f"我方已上场 {role}，但在地图上没点中它，无法撤回", notify=True)
+                    return False
+                kind, button = self._deploy_button()
             if kind == "withdraw":
                 self.log_info(f"我方已上场 {role}，先撤回再借助战", notify=True)
                 self.click(button, after_sleep=1)
                 self.next_frame()
                 self.debug_shot("support_withdrawn")
-            return True
+                return True
+            return False
         return False
 
     def _pick_friend_support(self, role, min_badge):
@@ -418,8 +457,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             if role not in name:
                 self.log_info(f"{c['badge']}椎 战力{c['power']} 是 {name}，不是 {role}，跳过", notify=False)
                 continue
-            reselect = lambda x=x, y=y: self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
-            if self._deploy_selected_support(f"{c['badge']}椎 {role}（战力 {c['power']}）", reselect):
+            if self._deploy_selected_support(
+                f"{c['badge']}椎 {role}（战力 {c['power']}）", role, self._reselect_card("好友助战", x, y)
+            ):
                 return True
         self.log_info(f"没有 {min_badge} 椎及以上的 {role} 助战", notify=True)
         if self.config.get("找不到就借战力最高", False):
@@ -427,8 +467,17 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.log_info("不借，直接开战", notify=True)
         return False
 
-    def _deploy_selected_support(self, label, reselect=None):
-        return self._place_selected(f"助战 {label}", reselect=reselect)
+    def _deploy_selected_support(self, label, card_name, reselect):
+        return self._place_selected(f"助战 {label}", card_name, reselect=reselect)
+
+    def _reselect_card(self, tab, x, y):
+        """切回页签再点卡片（点过地图单位后面板会跳回「我的人形」）。"""
+
+        def _do():
+            self._click_tab(tab)
+            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+
+        return _do
 
     def _pick_strongest_support(self, tab):
         """兜底：切到「全部」筛选，按战力从高到低借第一个能部署的助战。"""
@@ -443,8 +492,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
             self.next_frame()
             name = self._selected_role_name()
-            reselect = lambda x=x, y=y: self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
-            if self._deploy_selected_support(f"战力最高 {name}（{c['badge']}椎 战力 {c['power']}）", reselect):
+            if self._deploy_selected_support(
+                f"战力最高 {name}（{c['badge']}椎 战力 {c['power']}）", name, self._reselect_card("好友助战", x, y)
+            ):
                 return True
         self.log_info("兜底也没借到助战，直接开战", notify=True)
         return False
@@ -483,8 +533,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
             self.next_frame()
             name = self._selected_role_name()
-            reselect = lambda x=x, y=y: self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
-            placed = self._place_selected(f"我的人形 {name}（战力 {card['power']}）", before=count, reselect=reselect)
+            placed = self._place_selected(
+                f"我的人形 {name}（战力 {card['power']}）", name, before=count, reselect=self._reselect_card("我的人形", x, y)
+            )
             if placed:
                 count = self._deploy_count() or (count[0] + 1, count[1])
             else:
