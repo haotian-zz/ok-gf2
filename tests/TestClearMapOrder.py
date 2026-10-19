@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ok import Box
 
 from src.core.BaseGfTask import (
+    BaseGfTask,
     has_forbidden_restore_text,
     map_re,
     parse_deploy_count,
@@ -290,7 +291,7 @@ class TestSupportSelect(unittest.TestCase):
         self.assertFalse(is_orange_check(None, x, y))
 
     def test_pick_withdraw_target(self):
-        like = lambda a, b: bool(a) and bool(b) and (a in b or b in a)
+        like = BaseGfTask._name_like  # 可露凯/可露凱 这种 OCR 错字也要能对上
         own = {"OTs-14": 4535, "春田": 2637, "贝丝带": 2629}
         units = [((1, 1), "OTs-14"), ((2, 2), "可露凱"), ((3, 3), "春田"), ((4, 4), "贝丝带")]
         # 旧助战优先撤
