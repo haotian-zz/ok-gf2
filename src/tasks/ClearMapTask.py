@@ -204,7 +204,13 @@ class ClearMapTask(BaseGfTask):
 
         self.log_info("推图开始", notify=False)
         self._lineup_verified = False  # 每次启动任务只在第一场整理阵容，之后沿用
+        self.start_watchdog()
+        try:
+            self._run_sweep()
+        finally:
+            self.stop_watchdog()
 
+    def _run_sweep(self):
         ordered = self.scan_maps()
         if not ordered:
             # 不在选关页面：可能停在部署界面、战斗中或结算页（比如上次手动停止），先把这一关收尾再继续

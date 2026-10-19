@@ -1,6 +1,9 @@
+import os
 import re
+import sys
 import threading
 import time
+import traceback
 from difflib import SequenceMatcher
 
 from ok import BaseTask, Box, Logger, find_boxes_by_name
@@ -59,6 +62,8 @@ STAMINA_SAFE_TABS = (0, 1)  # 只允许点前两个页签（储存、道具）�
 PRESET_BOX = (0.75, 0.06, 0.995, 0.86)  # 「使用整备室配置」下拉框及其展开的编队列表
 PRESET_HEADER_Y = 0.12  # 下拉框标题在这条线以上，展开后的「整备室配置」选项在以下
 MAX_CONTINUE_STREAK = 8  # 连续点「继续前进」却没进入战斗的次数上限
+WATCHDOG_TIMEOUT = 120  # 秒：这么久没有任何进展（没点击、没日志、没换阶段）看门狗就截图报警
+WATCHDOG_KILL_LEVEL = 2  # 停滞达到 WATCHDOG_TIMEOUT 的这个倍数、而且不是人为暂停，就自动停止任务
 TAB_FALLBACK_XY = {"我的人形": (0.815, 0.039), "好友助战": (0.902, 0.039)}  # 页签 OCR 偶尔漏读时按固定位置点
 
 
@@ -87,6 +92,34 @@ def popup_texts(boxes, title_box, height):
         if cy < by < cy + 0.5 * height and abs(bx - cx) < 0.42 * height:
             out.append(b.name)
     return out
+
+
+def watchdog_message(stalled, executor_paused, task_paused, where):
+    """看门狗报警文案：先区分是人为暂停还是真卡住。"""
+    secs = int(stalled)
+    if task_paused:
+        return f"任务已暂停 {secs} 秒（任务卡片上的「暂停」按钮），点「开始」继续"
+    if executor_paused:
+        return f"程序已暂停 {secs} 秒（F9 热键或顶部的暂停按钮），按 F9 或点「开始」继续"
+    return f"{secs} 秒没有任何进展，卡在 {where}"
+
+
+def describe_screen(names):
+    """根据整屏 OCR 文字猜当前在哪个页面，给超时/报警信息用。"""
+    text = " ".join(names)
+    if stamina_popup_re.search(text):
+        return "体力弹窗"
+    if "任务失败" in text:
+        return "任务失败页"
+    if "继续前进" in text or "任务完成" in text:
+        return "结算页"
+    if "作战开始" in text:
+        return "部署界面"
+    if battle_ui_re.search(text):
+        return "战斗中"
+    if any(map_re.match(n) for n in names):
+        return "选关页面"
+    return "未知页面"
 
 
 def stamina_value(boxes, height):
@@ -187,6 +220,86 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.log_debug(f"调试截图失败: {e}")
             return None
 
+    # ------------------------------------------------------------------ 看门狗
+    _progress_ts = 0.0
+    _watchdog_stop_event = None
+
+    def _touch_progress(self):
+        self._progress_ts = time.time()
+
+    def log_info(self, message, notify=False, *args, **kwargs):
+        self._touch_progress()
+        return super().log_info(message, notify, *args, **kwargs)
+
+    def info_set(self, key, value):
+        self._touch_progress()
+        return super().info_set(key, value)
+
+    def start_watchdog(self, timeout=WATCHDOG_TIMEOUT):
+        """
+        起一个独立线程盯着任务：超过 timeout 秒没有任何进展就截图、记下执行线程卡在哪一行并弹通知；
+        不是人为暂停、又停滞到 WATCHDOG_KILL_LEVEL 倍超时，就自动停止任务，不让它无限转下去。
+        """
+        self.stop_watchdog()
+        self._touch_progress()
+        self._watchdog_stop_event = threading.Event()
+        threading.Thread(
+            target=self._watchdog_loop,
+            args=(timeout, self._watchdog_stop_event),
+            name=f"watchdog-{self.__class__.__name__}",
+            daemon=True,
+        ).start()
+
+    def stop_watchdog(self):
+        if self._watchdog_stop_event is not None:
+            self._watchdog_stop_event.set()
+            self._watchdog_stop_event = None
+
+    def _watchdog_loop(self, timeout, stop_event):
+        reported = 0
+        while not stop_event.wait(5):
+            try:
+                stalled = time.time() - self._progress_ts
+                if stalled < timeout:
+                    reported = 0
+                    continue
+                level = int(stalled // timeout)
+                if level <= reported:
+                    continue
+                reported = level
+                self._watchdog_report(stalled, level)
+            except Exception as e:
+                logger.warning(f"看门狗出错: {e}")
+
+    def _executor_where(self):
+        """执行线程当前的 Python 调用栈（最内层在前），用来判断卡在哪。"""
+        ident = getattr(getattr(self.executor, "thread", None), "ident", None)
+        frame = sys._current_frames().get(ident) if ident else None
+        if frame is None:
+            return "未知位置"
+        stack = traceback.extract_stack(frame)[-8:]
+        return " <- ".join(f"{os.path.basename(f.filename)}:{f.lineno} {f.name}" for f in reversed(stack))
+
+    def _watchdog_report(self, stalled, level):
+        executor_paused = bool(getattr(self.executor, "paused", False))
+        task_paused = bool(getattr(self, "_paused", False))
+        where = self._executor_where()
+        msg = watchdog_message(stalled, executor_paused, task_paused, where)
+        path = None
+        try:
+            path = save_debug_shot(getattr(self.executor, "_frame", None), self.name, f"watchdog_{level}")
+        except Exception as e:
+            logger.warning(f"看门狗截图失败: {e}")
+        logger.warning(f"[看门狗] {msg}；截图 {path}")
+        try:
+            self.notification(msg, error=True, tray=True)
+        except Exception as e:
+            logger.warning(f"看门狗通知失败: {e}")
+        if not executor_paused and not task_paused and level >= WATCHDOG_KILL_LEVEL:
+            logger.error(f"[看门狗] 持续 {int(stalled)} 秒无进展，自动停止任务")
+            self.info["Error"] = f"{int(stalled)} 秒没有进展，看门狗已停止任务，看日志里的 [看门狗] 和 watchdog 截图"
+            self.disable()
+
     def isolate_by_hsv_ranges(self, frame, ranges, invert=True, kernel_size=2):
         """
         :param frame: 输入图像（BGR）
@@ -220,6 +333,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         start = time.time()
         attempts = 0
         next_debug_shot = 30
+        boxes = []
         while time.time() - start < time_out:
             if time.time() - start > next_debug_shot:
                 # 长时间没匹配到结束条件，留一张图方便排查卡在什么页面
@@ -269,9 +383,11 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                     attempts += 1
                 self.sleep(2)
             self.next_frame()
-        self.debug_shot("skip_dialogs_timeout")
+        where = describe_screen([b.name for b in boxes])
+        self.log_info(f"等 {time_out} 秒没等到 {end_match}，当前在{where}: {[b.name for b in boxes][:12]}", notify=False)
+        self.debug_shot(f"skip_dialogs_timeout_{where}")
         if raise_if_not_found:
-            raise Exception("跳过剧情超时!")
+            raise Exception(f"跳过剧情超时! 当前在{where}")
 
     # ------------------------------------------------------------------ 好友助战
     def _ocr_panel(self, box, **kw):
@@ -1240,6 +1356,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         ``alt=True`` 时按住 alt 再点击（等价于 ``click_with_alt``），用于只有 alt 组合键才能命中的界面。
         x 支持 Box、Box 列表、屏幕比例（0~1）与绝对坐标，分派逻辑沿用父类。
         """
+        self._touch_progress()
         if alt:
             return self.click_with_alt(
                 x,

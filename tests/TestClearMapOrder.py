@@ -19,8 +19,10 @@ from src.core.BaseGfTask import (
     parse_deploy_count,
     popup_texts,
     stamina_popup_re,
+    describe_screen,
     stamina_tab_points,
     stamina_value,
+    watchdog_message,
     tab_count,
 )
 from src.core.debug_shot import save_debug_shot
@@ -243,6 +245,22 @@ class TestStaminaPopup(unittest.TestCase):
         self.assertEqual(tab_count(boxes, 612, 323, self.h), 121)
         self.assertEqual(tab_count(boxes, 738, 323, self.h), 6140)
         self.assertIsNone(tab_count(boxes, 488, 323, self.h))
+
+
+class TestWatchdog(unittest.TestCase):
+    def test_message_distinguishes_pause_from_stall(self):
+        # 实录：推图卡片的「暂停」按钮被点到，执行线程在 ok-script 的 sleep 里空转 6 分钟，界面上还显示「运行中」
+        self.assertIn("任务已暂停", watchdog_message(360, False, True, "x"))
+        self.assertIn("F9", watchdog_message(130, True, False, "x"))
+        self.assertIn("卡在 TaskExecutor.py:385 sleep", watchdog_message(130, False, False, "TaskExecutor.py:385 sleep"))
+
+    def test_describe_screen(self):
+        self.assertEqual(describe_screen(["任务完成", "继续前进", "确认"]), "结算页")
+        self.assertEqual(describe_screen(["部署人形", "4/4", "作战开始"]), "部署界面")
+        self.assertEqual(describe_screen(["01/12 回合", "行动结束"]), "战斗中")
+        self.assertEqual(describe_screen(["6-1", "SL-6-1", "挑战"]), "选关页面")
+        self.assertEqual(describe_screen(["情报拼图补充", "继续前进"]), "体力弹窗")
+        self.assertEqual(describe_screen(["随便什么"]), "未知页面")
 
 
 class TestSupportSelect(unittest.TestCase):
