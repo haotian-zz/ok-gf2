@@ -1,6 +1,7 @@
 import re
 import threading
 import time
+from difflib import SequenceMatcher
 
 from ok import BaseTask, Box, Logger, find_boxes_by_name
 
@@ -257,6 +258,15 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         identify_cards(self.frame, cards, self.width, self.height, self._avatar_book)
         return cards
 
+    @staticmethod
+    def _name_like(a, b):
+        """OCR 认名字偶尔错一个字（克莱妲/克兼妲），立绘模板按名字预筛时用模糊比较，宁可多点一下也别漏掉目标。"""
+        if not a or not b:
+            return False
+        if a in b or b in a:
+            return True
+        return SequenceMatcher(None, a, b).ratio() >= 0.5
+
     def _learn_card(self, card, name):
         """点过卡片、OCR 到名字后，把它的立绘存成模板，下次扫描就不用再点。"""
         if self._avatar_book.learn(name, card.get("avatar")):
@@ -486,10 +496,10 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
         self.debug_shot("support_my_tab", [c["power_box"] for c in deployed])
         self.log_info(f"我的人形已上场 {len(deployed)} 张卡片 {[(c['name'], c['power']) for c in deployed]}", notify=False)
-        if not any(c["name"] is None or role in c["name"] for c in deployed):
+        if not any(c["name"] is None or self._name_like(c["name"], role) for c in deployed):
             return False
         for c in deployed:
-            if c["name"] and role not in c["name"]:
+            if c["name"] and not self._name_like(c["name"], role):
                 continue
             name = self._click_card(c)
             if role not in name:
@@ -522,8 +532,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.log_info("好友助战列表为空（暂无可选择人形），通常是我方已上场同名角色没撤回", notify=True)
         candidates = pick_candidates(cards, min_badge)
         # 立绘认出来是别人的直接跳过；认出来就是目标的优先，认不出的再点一下确认
-        candidates = [c for c in candidates if c["name"] is None or role in c["name"]]
-        candidates.sort(key=lambda c: (c["name"] is None, -c["power"]))
+        candidates = [c for c in candidates if c["name"] is None or self._name_like(c["name"], role)]
+        candidates.sort(key=lambda c: (c["name"] != role, c["name"] is None, -c["power"]))
         self.log_info(
             f"好友助战({attr or '全部'}) 识别 {len(cards)} 张 {[(c['name'], c['badge'], c['power']) for c in cards]}，"
             f"椎数>={min_badge} 且可能是 {role} 的 {len(candidates)} 张",
