@@ -47,6 +47,7 @@ map_re = re.compile(r"^[^\d\s]{0,4}\s*\d{1,2}\s*-\s*\d{1,2}\s*\*?$")
 # 战斗中界面的标志：右下角「行动结束」或左上角「01/12 回合」计数
 battle_ui_re = re.compile(r"行动结束|\d{1,2}\s*/\s*\d{1,2}\s*回合")
 # 体力不足弹窗「情报拼图补充」：三个页签从左到右是 调度室储存、情报拼图道具、坍塌晶条
+challenge_button_re = re.compile(r"^挑战?$")  # 选关面板右下角的「挑战」按钮，实机偶尔只 OCR 出一个字
 stamina_popup_re = re.compile(r"情报拼图补充|情报.{0,3}补充|体力不足|体力补充")
 # 弹窗说明里出现这些字样，说明当前页签会消耗抽卡资源，绝不能点确认
 # 第三页签是坍塌晶条（抽卡资源），绝不能用；第二页签「消耗接入密钥兑换」是正常的体力道具，
@@ -240,6 +241,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             elif stamina_popup := self.find_boxes(boxes, match=stamina_popup_re):
                 # 体力不足弹窗挡在「继续前进」前面时，OCR 仍能读到后面的按钮，必须先处理弹窗
                 self._handle_stamina_popup(stamina_popup[0])
+                # 弹窗关掉后游戏停在触发它的那一页：选关面板要再点一次「挑战」才会进部署界面
+                # （「继续前进」在 end_match 里，返回后由 auto_battle 再点）
+                self.next_frame()
+                if challenge := self.ocr(0.5, 0.85, 1, 1, match=challenge_button_re):
+                    self.log_info("体力恢复后重新点「挑战」", notify=True)
+                    self.click(challenge[0], after_sleep=2)
             elif result := self.find_boxes(boxes, match=end_match, boundary=end_box):
                 # 优先返回"继续前进"
                 for r in result:
