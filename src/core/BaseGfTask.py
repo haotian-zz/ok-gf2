@@ -6,6 +6,17 @@ from ok import BaseTask, Box, Logger, find_boxes_by_name
 
 from src.core.base_mixin.runtime_mixin import RuntimeMixin
 from src.core.debug_shot import save_debug_shot
+from src.core.support_select import (
+    BUTTON_BOX,
+    NAME_BOX,
+    PANEL_BOX,
+    TAB_BOX,
+    check_point,
+    filter_point,
+    find_cards,
+    is_orange_check,
+    pick_candidates,
+)
 from src.data.FeatureList import FeatureList as fL
 from src.image.frame_processs import isolate_by_hsv_ranges
 from src.image.hsv_config import HSVRange as hR
@@ -216,6 +227,121 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if raise_if_not_found:
             raise Exception("跳过剧情超时!")
 
+    # ------------------------------------------------------------------ 好友助战
+    def _ocr_panel(self, box, **kw):
+        x, y, to_x, to_y = box
+        return self.ocr(x, y, to_x, to_y, **kw)
+
+    def _ocr_panel_scaled(self, box, match):
+        # 椎数角标只有十几像素，把局部放大 3 倍再识别
+        return self._ocr_panel(box, match=match, target_height=self.height * 3)
+
+    def _click_tab(self, name):
+        tab = self._ocr_panel(TAB_BOX, match=self.fix_match_regex([name]))
+        if not tab:
+            raise Exception(f"部署界面没找到「{name}」页签")
+        self.click(tab[0], after_sleep=1)
+        self.next_frame()
+        return tab[0]
+
+    def _selected_role_name(self):
+        return "".join(b.name for b in self._ocr_panel(NAME_BOX))
+
+    def _deploy_button(self):
+        for b in self._ocr_panel(BUTTON_BOX):
+            if "部署" in b.name:
+                return "deploy", b
+            if "撤回" in b.name:
+                return "withdraw", b
+        return None, None
+
+    def borrow_support(self):
+        """
+        在部署界面借好友助战：目标角色由「助战角色」「助战最低椎数」决定。
+        1. 我的人形里若已上场同名角色，先选中并「撤回人形」；
+        2. 好友助战按属性筛选，按战力从高到低找椎数达标的卡片，点中后核对左下角名字，再「部署人形」；
+        3. 没有达标的就不借，直接返回 False。
+        """
+        role = self.config.get("助战角色", "威玛西娜").strip()
+        min_badge = int(self.config.get("助战最低椎数", 6))
+        self.info_set("current_task", "borrow_support")
+        self.next_frame()
+        if not self.ocr(match="作战开始", box=self.box.bottom):
+            self.log_info("不在部署界面，跳过借助战", notify=False)
+            return False
+        try:
+            self._withdraw_own(role)
+            return self._pick_friend_support(role, min_badge)
+        finally:
+            self.next_frame()
+            self.debug_shot("support_done")
+
+    def _withdraw_own(self, role):
+        self._click_tab("我的人形")
+        self.sleep(0.5)
+        self.next_frame()
+        cards = find_cards(self._ocr_panel_scaled(PANEL_BOX, match=re.compile(r"^\d{1,6}$")), self.width, self.height)
+        deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
+        self.debug_shot("support_my_tab", [c["power_box"] for c in deployed])
+        self.log_info(f"我的人形已上场 {len(deployed)} 张卡片", notify=False)
+        for c in deployed:
+            x, y = c["center"]
+            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+            self.next_frame()
+            name = self._selected_role_name()
+            if role not in name:
+                continue
+            kind, button = self._deploy_button()
+            if kind == "withdraw":
+                self.log_info(f"我方已上场 {role}，先撤回再借助战", notify=True)
+                self.click(button, after_sleep=1)
+                self.next_frame()
+                self.debug_shot("support_withdrawn")
+            return True
+        return False
+
+    def _pick_friend_support(self, role, min_badge):
+        tab = self._click_tab("好友助战")
+        attr = self.get_role_by_name(role)
+        fx, fy = filter_point(tab, attr, self.width, self.height)
+        self.click_relative(fx / self.width, fy / self.height, after_sleep=1)
+        self.next_frame()
+        cards = find_cards(self._ocr_panel_scaled(PANEL_BOX, match=re.compile(r"^\d{1,6}$")), self.width, self.height)
+        self.debug_shot("support_scan", [c["power_box"] for c in cards])
+        candidates = pick_candidates(cards, min_badge)
+        self.log_info(
+            f"好友助战({attr or '全部'}) 识别 {len(cards)} 张，椎数>={min_badge} 的 {len(candidates)} 张: "
+            f"{[(c['badge'], c['power']) for c in candidates]}",
+            notify=False,
+        )
+        for c in candidates:
+            x, y = c["center"]
+            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+            self.next_frame()
+            name = self._selected_role_name()
+            if role not in name:
+                self.log_info(f"{c['badge']}椎 战力{c['power']} 是 {name}，不是 {role}，跳过", notify=False)
+                continue
+            kind, button = self._deploy_button()
+            if kind == "withdraw":
+                self.log_info(f"{c['badge']}椎 {role} 助战已在场上", notify=True)
+                return True
+            if kind != "deploy":
+                self.log_info(f"选中 {role} 后没找到部署按钮，跳过", notify=False)
+                continue
+            self.click(button, after_sleep=1.5)
+            self.next_frame()
+            if confirm := self.ocr(match=self.fix_match_regex(["确认"]), box=self.box.bottom):
+                self.click(confirm, after_sleep=1.5)
+                self.next_frame()
+            kind, _ = self._deploy_button()
+            if kind == "withdraw":
+                self.log_info(f"已借 {c['badge']}椎 {role} 助战（战力 {c['power']}）", notify=True)
+                return True
+            self.log_info(f"点了部署但没确认上场，换下一张", notify=False)
+        self.log_info(f"没有 {min_badge} 椎及以上的 {role} 助战，不借，直接开战", notify=True)
+        return False
+
     def _handle_stamina_popup(self, title):
         """
         体力不足弹窗：开了「自动使用体力药」就只用调度室储存/情报拼图道具恢复，
@@ -334,6 +460,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             return
         if result[0].name == "作战开始":
             self.sleep(2)
+            if self.config.get("借好友助战", False):
+                self.borrow_support()
+                result = self.wait_ocr(match="作战开始", box=self.box.bottom, time_out=10, raise_if_not_found=True)
             self.click_box(result, after_sleep=1)
             start_result = self.skip_dialogs(
                 end_match=[
