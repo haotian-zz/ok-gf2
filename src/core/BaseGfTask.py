@@ -19,6 +19,50 @@ stamina_re = re.compile(r"^\d+/\d+")
 map_re = re.compile(r"^[^\d\s]{0,4}\s*\d{1,2}\s*-\s*\d{1,2}\s*\*?$")
 # 战斗中界面的标志：右下角「行动结束」或左上角「01/12 回合」计数
 battle_ui_re = re.compile(r"行动结束|\d{1,2}\s*/\s*\d{1,2}\s*回合")
+# 体力不足弹窗「情报拼图补充」：三个页签从左到右是 调度室储存、情报拼图道具、坍塌晶条
+stamina_popup_re = re.compile(r"情报拼图补充|情报.{0,3}补充|体力不足|体力补充")
+# 弹窗说明里出现这些字样，说明当前页签会消耗抽卡资源，绝不能点确认
+forbidden_restore_re = re.compile(r"晶条|晶体|钻石|购买|兑换|充值|付费")
+STAMINA_TAB_DY = 0.14  # 页签行相对弹窗标题中心的垂直偏移，单位：画面高度
+STAMINA_TAB_DX = 0.161  # 相邻页签中心的水平间距，单位：画面高度
+STAMINA_SAFE_TABS = (0, 1)  # 只允许点前两个页签（储存、道具），第三个是坍塌晶条
+MAX_CONTINUE_STREAK = 8  # 连续点「继续前进」却没进入战斗的次数上限
+
+
+def box_center(box):
+    return box.x + box.width / 2, box.y + box.height / 2
+
+
+def stamina_tab_points(title_box, height):
+    """由弹窗标题位置推算三个页签的中心点，顺序与游戏内一致：储存、道具、晶条。"""
+    cx, cy = box_center(title_box)
+    y = cy + STAMINA_TAB_DY * height
+    return [(cx + (i - 1) * STAMINA_TAB_DX * height, y) for i in range(3)]
+
+
+def has_forbidden_restore_text(names):
+    """说明文字里提到晶条/购买等字样时返回 True。"""
+    return any(forbidden_restore_re.search(n) for n in names)
+
+
+def popup_texts(boxes, title_box, height):
+    """只取弹窗范围内（标题下方约半屏高、左右各 0.42 画面高）的文字。"""
+    cx, cy = box_center(title_box)
+    out = []
+    for b in boxes:
+        bx, by = box_center(b)
+        if cy < by < cy + 0.5 * height and abs(bx - cx) < 0.42 * height:
+            out.append(b.name)
+    return out
+
+
+def tab_count(boxes, tab_x, tab_y, height):
+    """读页签图标下方的数量数字；识别不到返回 None。"""
+    for b in boxes:
+        bx, by = box_center(b)
+        if abs(bx - tab_x) < 0.06 * height and tab_y < by < tab_y + 0.1 * height and number_re.match(b.name):
+            return int(b.name)
+    return None
 
 
 def parse_time_option(option: str) -> list[float]:
@@ -143,6 +187,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 self.click(no_alert)
                 self.sleep(0.2)
                 self.click(self.find_boxes(boxes, match="确认"), after_sleep=2)
+            elif stamina_popup := self.find_boxes(boxes, match=stamina_popup_re):
+                # 体力不足弹窗挡在「继续前进」前面时，OCR 仍能读到后面的按钮，必须先处理弹窗
+                self._handle_stamina_popup(stamina_popup[0])
             elif result := self.find_boxes(boxes, match=end_match, boundary=end_box):
                 # 优先返回"继续前进"
                 for r in result:
@@ -168,6 +215,73 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.debug_shot("skip_dialogs_timeout")
         if raise_if_not_found:
             raise Exception("跳过剧情超时!")
+
+    def _handle_stamina_popup(self, title):
+        """
+        体力不足弹窗：开了「自动使用体力药」就只用调度室储存/情报拼图道具恢复，
+        没开、或两种都用不了，就取消弹窗并抛异常停止任务，绝不消耗坍塌晶条。
+        """
+        self.debug_shot("stamina_popup", [title])
+        if not self.config.get("自动使用体力药", False):
+            self._cancel_stamina_popup()
+            raise Exception("体力不足，已停止；要自动用体力药请打开「自动使用体力药」选项")
+        if self.restore_stamina(title):
+            return
+        raise Exception("体力不足，调度室储存和情报拼图道具都用不了，已停止（不会使用坍塌晶条）")
+
+    def _cancel_stamina_popup(self):
+        self.next_frame()
+        if cancel := self.ocr(match=self.fix_match_regex(["取消"])):
+            self.click(cancel, after_sleep=1)
+        else:
+            self.back()
+            self.sleep(1)
+
+    def restore_stamina(self, title):
+        """
+        在「情报拼图补充」弹窗上依次试前两个页签（调度室储存、情报拼图道具），每次只用 1 份。
+        :return: True 弹窗已消失（恢复成功）；False 两个页签都没用上，弹窗已取消
+        """
+        points = stamina_tab_points(title, self.height)
+        for idx in STAMINA_SAFE_TABS:
+            x, y = points[idx]
+            self.click_relative(x / self.width, y / self.height, after_sleep=1)
+            self.next_frame()
+            boxes = self.ocr()
+            if not self.find_boxes(boxes, match=stamina_popup_re):
+                self.log_info("体力弹窗已消失", notify=False)
+                return True
+            texts = popup_texts(boxes, title, self.height)
+            self.debug_shot(f"stamina_tab{idx + 1}", boxes)
+            if has_forbidden_restore_text(texts):
+                self.log_info(f"体力弹窗页签{idx + 1} 会消耗抽卡资源，跳过: {texts}", notify=False)
+                continue
+            count = tab_count(boxes, x, y, self.height)
+            if count == 0:
+                self.log_info(f"体力弹窗页签{idx + 1} 数量为 0，跳过", notify=False)
+                continue
+            confirm = [c for c in self.find_boxes(boxes, match=self.fix_match_regex(["确认"])) if c.y > y]
+            if not confirm:
+                self.log_info(f"体力弹窗页签{idx + 1} 没找到确认按钮，跳过", notify=False)
+                continue
+            self.click(confirm[0], after_sleep=2)
+            self.next_frame()
+            boxes = self.ocr()
+            if not self.find_boxes(boxes, match=stamina_popup_re):
+                self.log_info(f"已用体力弹窗页签{idx + 1} 恢复体力（数量 {count}）", notify=True)
+                self.debug_shot("stamina_restored", boxes)
+                return True
+            self.log_info(f"体力弹窗页签{idx + 1} 确认后弹窗仍在，换下一个页签", notify=False)
+        self._cancel_stamina_popup()
+        return False
+
+    def _click_continue(self, box):
+        """点「继续前进」，连续点太多次都没进入战斗就停，避免体力不足时无限循环。"""
+        self._continue_streak = getattr(self, "_continue_streak", 0) + 1
+        if self._continue_streak > MAX_CONTINUE_STREAK:
+            self.debug_shot("continue_no_progress", box)
+            raise Exception(f"连续点击继续前进 {MAX_CONTINUE_STREAK} 次都没进入战斗，已停止")
+        self.click_box(box, after_sleep=2)
 
     def _is_battle_frame(self, boxes):
         """
@@ -205,9 +319,11 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             raise_if_not_found=False,
         )
         self.debug_shot("battle_entry", result)
+        if result and result[0].name != "继续前进":
+            self._continue_streak = 0
         if result and result[0].name == "继续前进":
             self.log_info("开局检测到继续前进，点击后开启新一轮自动战斗", notify=True)
-            self.click_box(result, after_sleep=2)
+            self._click_continue(result)
             self.auto_battle(
                 end_match=end_match,
                 end_box=end_box,
@@ -234,7 +350,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.debug_shot("after_battle_start", start_result)
             if start_result and "继续前进" in start_result[0].name:
                 self.log_info("开局后检测到继续前进，点击后开启新一轮自动战斗", notify=True)
-                self.click_box(start_result, after_sleep=2)
+                self._click_continue(start_result)
                 self.auto_battle(
                     end_match=end_match,
                     end_box=end_box,
@@ -264,7 +380,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                     )
                     if start_result and start_result[0].name == "继续前进":
                         self.log_info("开局二次检测到继续前进，点击后开启新一轮自动战斗", notify=True)
-                        self.click_box(start_result, after_sleep=2)
+                        self._click_continue(start_result)
                         self.auto_battle(
                             end_match=end_match,
                             end_box=end_box,
@@ -296,9 +412,11 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         ):
             # 优先遍历所有结果找"继续前进"
             clicked = False
+            if any(r.name != "继续前进" for r in results):
+                self._continue_streak = 0
             for result in results:
                 if result.name == "继续前进":
-                    self.click_box(result, after_sleep=2)
+                    self._click_continue(result)
                     clicked = True
                     clicked_continue = True
                     break
@@ -327,8 +445,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 has_dialog_behind_start=has_dialog_behind_start,
             )
             return
-        if self.wait_click_ocr(match="继续前进", box=self.box.bottom_right, raise_if_not_found=False, time_out=3):
+        if cont := self.wait_ocr(match="继续前进", box=self.box.bottom_right, raise_if_not_found=False, time_out=3):
             self.log_info("结算后检测到继续前进，点击后开启新一轮自动战斗", notify=True)
+            self._click_continue(cont)
             self.auto_battle(
                 end_match=end_match,
                 end_box=end_box,

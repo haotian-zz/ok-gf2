@@ -12,7 +12,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ok import Box
 
-from src.core.BaseGfTask import map_re
+from src.core.BaseGfTask import (
+    has_forbidden_restore_text,
+    map_re,
+    popup_texts,
+    stamina_popup_re,
+    stamina_tab_points,
+    tab_count,
+)
 from src.core.debug_shot import save_debug_shot
 from src.tasks.clear_map_progress import ProgressStore
 from src.tasks.ClearMapTask import canonical_name, merge_maps, order_maps, pick_candidate
@@ -155,3 +162,44 @@ class TestDebugShot(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStaminaPopup(unittest.TestCase):
+    """按 1280x768 窗口实测的「情报拼图补充」弹窗布局：标题中心 (614, 215)，页签中心 y=323，x=488/612/738。"""
+
+    def setUp(self):
+        self.h = 768
+        self.title = Box(548, 203, 132, 24, name="情报拼图补充")
+
+    def test_title_regex(self):
+        for name in ["情报拼图补充", "情报拼圖补充", "体力不足"]:
+            self.assertIsNotNone(stamina_popup_re.search(name), name)
+        for name in ["继续前进", "情报", "补充"]:
+            self.assertIsNone(stamina_popup_re.search(name), name)
+
+    def test_tab_points(self):
+        pts = stamina_tab_points(self.title, self.h)
+        self.assertEqual(len(pts), 3)
+        for (x, y), (ex, ey) in zip(pts, [(488, 323), (612, 323), (738, 323)], strict=True):
+            self.assertAlmostEqual(x, ex, delta=6)
+            self.assertAlmostEqual(y, ey, delta=6)
+
+    def test_forbidden_text(self):
+        self.assertTrue(has_forbidden_restore_text(["使用坍塌晶条恢复情报拼图"]))
+        self.assertTrue(has_forbidden_restore_text(["购买", "确认"]))
+        self.assertFalse(has_forbidden_restore_text(["快速取出调度室储存情报拼图", "取出数量 0", "确认", "取消"]))
+
+    def test_popup_texts_excludes_background(self):
+        boxes = [
+            Box(500, 450, 220, 20, name="快速取出调度室储存情报拼图"),
+            Box(1030, 70, 60, 20, name="81/240"),  # 右上角体力
+            Box(40, 360, 40, 20, name="4-3"),  # 弹窗外的关卡卡片
+            Box(730, 530, 40, 20, name="确认"),
+        ]
+        self.assertEqual(popup_texts(boxes, self.title, self.h), ["快速取出调度室储存情报拼图", "确认"])
+
+    def test_tab_count(self):
+        boxes = [Box(600, 345, 28, 16, name="121"), Box(720, 345, 36, 16, name="6140"), Box(1140, 70, 50, 20, name="6140")]
+        self.assertEqual(tab_count(boxes, 612, 323, self.h), 121)
+        self.assertEqual(tab_count(boxes, 738, 323, self.h), 6140)
+        self.assertIsNone(tab_count(boxes, 488, 323, self.h))
