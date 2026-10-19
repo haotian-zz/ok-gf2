@@ -199,9 +199,22 @@ def find_tiles(frame, width, height):
         if area < 800 * s * s or not (80 * s <= bw <= 190 * s) or not (50 * s <= bh <= 140 * s):
             continue
         cx, cy = x0 + bx + bw / 2, y0 + by + bh / 2
-        tiles.append({"center": (cx, cy), "bbox": (x0 + bx, y0 + by, int(bw), int(bh))})
+        comp = mask[by : by + bh, bx : bx + bw] > 0
+        sat = float(hsv[by : by + bh, bx : bx + bw, 1][comp].mean()) if comp.any() else 0.0
+        tiles.append({"center": (cx, cy), "bbox": (x0 + bx, y0 + by, int(bw), int(bh)), "sat": sat})
     tiles.sort(key=lambda t: (t["center"][1], t["center"][0]))
     return tiles
+
+
+def order_tiles(tiles, digit_boxes, height):
+    """
+    试点地格的顺序：没有单位编号压着的优先，其中颜色更饱和（蓝得更明显，通常是可部署的高亮格）的靠前。
+    """
+    free = empty_tiles(tiles, digit_boxes, height)
+    free_ids = {id(t) for t in free}
+    taken = [t for t in tiles if id(t) not in free_ids]
+    key = lambda t: -t.get("sat", 0)
+    return sorted(free, key=key) + sorted(taken, key=key)
 
 
 def empty_tiles(tiles, digit_boxes, height):

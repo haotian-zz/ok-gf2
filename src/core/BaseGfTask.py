@@ -19,6 +19,7 @@ from src.core.support_select import (
     find_cards,
     find_tiles,
     is_orange_check,
+    order_tiles,
     pick_candidates,
     read_badge,
 )
@@ -279,46 +280,54 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 return "hint", b
         return None, None
 
-    def _choose_tile(self):
+    def _candidate_tiles(self):
         """
-        选中卡片后要点的地格：阵容没满就找空地格（蓝色地格里没站人的）；
-        满了就点编号最大的那个已上场单位所在的格子，让新人形顶替它。
+        选中卡片后可以试着点的地格，按优先级排序：
+        阵容满了先点编号最大的已上场单位（顶替它）；否则没人压着、颜色更蓝的地格优先，剩下的也排在后面兜底。
+        单位编号 OCR 经常漏，所以不把「有没有编号」当硬条件，只用来排序。
         """
         count = self._deploy_count()
         digits = [b for b in self.ocr(*MAP_BOX, match=re.compile(r"^\d$")) if 1 <= int(b.name) <= 6]
-        full = count is not None and count[0] >= count[1]
-        if not full:
-            tiles = find_tiles(self.frame, self.width, self.height)
-            free = empty_tiles(tiles, digits, self.height)
-            self.debug_shot("tiles", digits)
-            self.log_info(f"地格 {len(tiles)} 个，空的 {len(free)} 个，单位编号 {[d.name for d in digits]}", notify=False)
-            if free:
-                return free[0]["center"], "空地格"
-        if digits:
+        tiles = find_tiles(self.frame, self.width, self.height)
+        self.debug_shot("tiles", digits)
+        out = []
+        if count is not None and count[0] >= count[1] and digits:
             tag = max(digits, key=lambda b: int(b.name))
-            cx, cy = tag.x + tag.width / 2, tag.y + tag.height / 2 + 0.07 * self.height
-            return (cx, cy), f"{tag.name}号单位的格子"
-        return None, None
+            out.append(((tag.x + tag.width / 2, tag.y + tag.height / 2 + 0.07 * self.height), f"{tag.name}号单位的格子"))
+        for t in order_tiles(tiles, digits, self.height):
+            out.append((t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])}, 饱和度 {int(t.get('sat', 0))})"))
+        self.log_info(f"阵容 {count}，地格 {len(tiles)} 个，单位编号 {[d.name for d in digits]}", notify=False)
+        return out[:8]
 
-    def _place_selected(self, label, before=None):
+    def _place_selected(self, label, before=None, reselect=None):
         """
         当前已选中一张卡片（我的人形或好友助战）：
-        按钮是「撤回人形」说明已在场上；是「请点击地格」就先点一个地格；然后点「部署人形」并确认。
+        按钮是「撤回人形」说明已在场上；是「请点击地格」就逐个试点地格，直到出现「部署人形」；然后点部署并确认。
         :param before: 部署前的 (n, m) 计数，用来核对；None 时用按钮变成「撤回人形」核对
+        :param reselect: 重新选中这张卡片的函数；点到已有人的格子会把选中切到那个单位，试下一个格子前要重选
         """
         kind, button = self._deploy_button()
         if kind == "withdraw":
             self.log_info(f"{label} 已在场上", notify=True)
             return True
         if kind == "hint":
-            tile, desc = self._choose_tile()
-            if tile is None:
+            candidates = self._candidate_tiles()
+            if not candidates:
                 self.log_info(f"{label} 需要先点地格，但没找到可点的地格", notify=False)
                 return False
-            self.log_info(f"{label} 先点{desc}", notify=False)
-            self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=1)
-            self.next_frame()
-            kind, button = self._deploy_button()
+            for i, (tile, desc) in enumerate(candidates):
+                if i > 0 and reselect:
+                    reselect()
+                    self.next_frame()
+                    kind, button = self._deploy_button()
+                    if kind == "deploy":
+                        break
+                self.log_info(f"{label} 试点{desc}", notify=False)
+                self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=1)
+                self.next_frame()
+                kind, button = self._deploy_button()
+                if kind == "deploy":
+                    break
         if kind != "deploy":
             self.log_info(f"{label} 没出现部署按钮，跳过", notify=False)
             return False
@@ -404,7 +413,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             if role not in name:
                 self.log_info(f"{c['badge']}椎 战力{c['power']} 是 {name}，不是 {role}，跳过", notify=False)
                 continue
-            if self._deploy_selected_support(f"{c['badge']}椎 {role}（战力 {c['power']}）"):
+            reselect = lambda x=x, y=y: self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+            if self._deploy_selected_support(f"{c['badge']}椎 {role}（战力 {c['power']}）", reselect):
                 return True
         self.log_info(f"没有 {min_badge} 椎及以上的 {role} 助战", notify=True)
         if self.config.get("找不到就借战力最高", False):
@@ -412,8 +422,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.log_info("不借，直接开战", notify=True)
         return False
 
-    def _deploy_selected_support(self, label):
-        return self._place_selected(f"助战 {label}")
+    def _deploy_selected_support(self, label, reselect=None):
+        return self._place_selected(f"助战 {label}", reselect=reselect)
 
     def _pick_strongest_support(self, tab):
         """兜底：切到「全部」筛选，按战力从高到低借第一个能部署的助战。"""
@@ -428,7 +438,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
             self.next_frame()
             name = self._selected_role_name()
-            if self._deploy_selected_support(f"战力最高 {name}（{c['badge']}椎 战力 {c['power']}）"):
+            reselect = lambda x=x, y=y: self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+            if self._deploy_selected_support(f"战力最高 {name}（{c['badge']}椎 战力 {c['power']}）", reselect):
                 return True
         self.log_info("兜底也没借到助战，直接开战", notify=True)
         return False
@@ -467,7 +478,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
             self.next_frame()
             name = self._selected_role_name()
-            placed = self._place_selected(f"我的人形 {name}（战力 {card['power']}）", before=count)
+            reselect = lambda x=x, y=y: self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+            placed = self._place_selected(f"我的人形 {name}（战力 {card['power']}）", before=count, reselect=reselect)
             if placed:
                 count = self._deploy_count() or (count[0] + 1, count[1])
             else:
