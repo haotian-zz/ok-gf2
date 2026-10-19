@@ -215,6 +215,8 @@ class TestStaminaPopup(unittest.TestCase):
         self.assertTrue(has_forbidden_restore_text(["使用坍塌晶条恢复情报拼图"]))
         self.assertTrue(has_forbidden_restore_text(["购买", "确认"]))
         self.assertFalse(has_forbidden_restore_text(["快速取出调度室储存情报拼图", "取出数量 0", "确认", "取消"]))
+        # 实录：第二页签是接入密钥，是正常体力道具，不能被「兑换」两个字误伤
+        self.assertFalse(has_forbidden_restore_text(["消耗接入密钥兑换", "消耗1接入密钥，获得60情报拼图", "取消", "确认"]))
 
     def test_popup_texts_excludes_background(self):
         boxes = [
