@@ -15,6 +15,7 @@ from ok import Box
 from src.core.BaseGfTask import (
     has_forbidden_restore_text,
     map_re,
+    parse_deploy_count,
     popup_texts,
     stamina_popup_re,
     stamina_tab_points,
@@ -31,7 +32,7 @@ from src.core.support_select import (
     pick_candidates,
     read_badge,
 )
-from src.tasks.ClearMapTask import canonical_name, merge_maps, order_maps, pick_candidate
+from src.tasks.ClearMapTask import canonical_name, classify_panel, merge_maps, order_maps, pick_candidate
 
 
 class TestMapRe(unittest.TestCase):
@@ -94,6 +95,23 @@ class TestPickCandidate(unittest.TestCase):
     def test_group_partial_overlap_counts(self):
         ordered = [(Box(100, 0, 1, 1, name="2-5"), {"2-5", "2-5*"})]
         self.assertIsNone(pick_candidate(ordered, {"2-5*"}))
+
+    def test_classify_panel(self):
+        # SL-5-3 实录：面板动画里只先认出「特殊奖励」，按钮还没出来 -> unknown，不能当未解锁
+        self.assertEqual(classify_panel(True, False, True, [], []), ("unknown", None))
+        self.assertEqual(classify_panel(True, False, True, [], ["观看"]), ("watch", ["观看"]))
+        self.assertEqual(classify_panel(True, False, True, ["挑战"], []), ("challenge", ["挑战"]))
+        self.assertEqual(classify_panel(True, True, True, [], []), ("locked", None))
+        self.assertEqual(classify_panel(True, False, False, [], []), ("cleared", None))
+        self.assertEqual(classify_panel(False, False, False, [], []), ("nopanel", None))
+
+    def test_parse_deploy_count(self):
+        self.assertEqual(parse_deploy_count("4/4作战效能"), (4, 4))
+        self.assertEqual(parse_deploy_count("3 / 5"), (3, 5))
+        self.assertEqual(parse_deploy_count("414"), (4, 4))
+        self.assertEqual(parse_deploy_count("3l4"), (3, 4))
+        self.assertIsNone(parse_deploy_count("35733"))
+        self.assertIsNone(parse_deploy_count("部署人形"))
 
 
 class TestLoadingFrame(unittest.TestCase):

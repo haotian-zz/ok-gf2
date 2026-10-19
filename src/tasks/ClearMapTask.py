@@ -10,6 +10,31 @@ logger = Logger.get_logger(__name__)
 
 
 
+PANEL_WORDS = ["特殊奖励", "观看", "挑战", "完成前置关卡解锁"]
+
+
+def classify_panel(has_boxes, locked_hint, special_reward, challenge, watch):
+    """
+    关卡面板文字 -> (状态, 动作按钮)。
+    - 没识别到任何面板文字：nopanel
+    - 有「完成前置关卡解锁」：locked
+    - 没有「特殊奖励」（首通奖励已领）：cleared
+    - 有奖励且有「挑战」/「观看」：challenge / watch
+    - 有奖励但按钮还没识别到：unknown，交给调用方重读，绝不能当未解锁跳过
+    """
+    if not has_boxes:
+        return "nopanel", None
+    if locked_hint:
+        return "locked", None
+    if not special_reward:
+        return "cleared", None
+    if challenge:
+        return "challenge", challenge
+    if watch:
+        return "watch", watch
+    return "unknown", None
+
+
 def canonical_name(name_group):
     """一组 OCR 名字里取一个稳定的关卡名：优先不带 * 的、最短的。"""
     names = sorted((n for n in name_group if isinstance(n, str)), key=lambda n: (n.endswith("*"), len(n), n))
@@ -115,32 +140,34 @@ class ClearMapTask(BaseGfTask):
     def inspect_card(self, card, name):
         """
         点开卡片读右侧面板，返回 (状态, 动作按钮)。
-        状态：cleared / locked / challenge / watch / nopanel
+        状态：cleared / locked / challenge / watch / nopanel / unknown
+        面板是带动画弹出来的，「特殊奖励」往往比底部按钮先出现，所以看到奖励却没看到按钮时多读几帧再下结论。
         """
         self.click(card, after_sleep=1)
         boxes = (
-            self.wait_ocr(box="right", match=["特殊奖励", "观看", "挑战", "完成前置关卡解锁"], time_out=3, log=True)
+            self.wait_ocr(box="right", match=PANEL_WORDS, time_out=3, log=True)
             or []
         )
+        status, action = self.panel_status(boxes)
+        for _ in range(3):
+            if status != "unknown":
+                break
+            self.sleep(0.6)
+            self.next_frame()
+            boxes = self.ocr(box="right", match=PANEL_WORDS, log=True) or []
+            status, action = self.panel_status(boxes)
+        self.debug_shot(f"panel_{name}", boxes)
+        return status, action
+
+    def panel_status(self, boxes):
+        """按面板上识别到的文字判断关卡状态；只看到「特殊奖励」没看到按钮算 unknown，不能当作未解锁。"""
         # wait_ocr 的 match 会经过 OCR 纠错表展开（現看/観看 → 观看），
         # 但 find_boxes 是精确比较，这里要用同样展开过的匹配列表
         locked_hint = self.find_boxes(boxes, match=self.fix_match_regex(["完成前置关卡解锁"]))
         special_reward = self.find_boxes(boxes, match=self.fix_match_regex(["特殊奖励"]))
         challenge = self.find_boxes(boxes, match=self.fix_match_regex(["挑战"]))
         watch = self.find_boxes(boxes, match=self.fix_match_regex(["观看"]))
-        self.debug_shot(f"panel_{name}", boxes)
-        if not boxes:
-            return "nopanel", None
-        if locked_hint:
-            return "locked", None
-        if not special_reward:
-            # 没有首通特殊奖励 = 已通关
-            return "cleared", None
-        if challenge:
-            return "challenge", challenge
-        if watch:
-            return "watch", watch
-        return "locked", None
+        return classify_panel(bool(boxes), bool(locked_hint), bool(special_reward), challenge, watch)
 
     def close_map_panel(self):
         """关卡面板打开时才按返回；选关页面没有面板时按返回会直接退出到章节页面。"""
@@ -249,6 +276,8 @@ class ClearMapTask(BaseGfTask):
         locked = set()  # 本轮判定未解锁，推完任意一关后清空重判
         cursor = None  # 进度游标：最近一次处理过的关卡名，只往它右边推
         last_scroll = None  # 上次为了往右看而点击的最右卡片名
+        rewound = False  # 本轮是否已经回到章节起点重查过未解锁的关卡
+        unknown_tries = {}  # 面板读不出按钮的关卡 -> 已重试次数
 
         while True:
             self.sleep(1)
@@ -268,6 +297,16 @@ class ClearMapTask(BaseGfTask):
                     self.click(rightmost, after_sleep=1.5)
                     self.close_map_panel()
                     continue
+                if locked and not rewound:
+                    # 未解锁的关卡可能在游标左边、甚至已经滚出屏幕（比如 SL-5-3 在 BH-5-1 左边），
+                    # 回到章节起点不带游标重新核实一遍
+                    self.log_info(f"右边没有可推的关卡，回章节起点重查未解锁的 {sorted(locked)}", notify=False)
+                    rewound = True
+                    locked.clear()
+                    cursor = None
+                    last_scroll = None
+                    self.go_to_chapter_start()
+                    continue
                 if locked:
                     raise Exception(f"剩余关卡都未解锁({sorted(locked)}), 请检查前置关卡后再启动")
                 return count
@@ -278,6 +317,16 @@ class ClearMapTask(BaseGfTask):
             if status == "nopanel":
                 self.log_info(f"{name} 未识别到关卡面板, 跳过", notify=False)
                 session_done.update(group)
+                self.close_map_panel()
+                continue
+            if status == "unknown":
+                tries = unknown_tries.get(name, 0) + 1
+                unknown_tries[name] = tries
+                if tries <= 2:
+                    self.log_info(f"{name} 面板上没读到挑战/观看按钮，关掉面板重试第 {tries} 次", notify=False)
+                else:
+                    self.log_info(f"{name} 面板反复读不到按钮, 跳过", notify=True)
+                    session_done.update(group)
                 self.close_map_panel()
                 continue
             if status == "locked":
@@ -305,8 +354,12 @@ class ClearMapTask(BaseGfTask):
             count += 1
             session_done.update(group)
             cursor = name
-            locked.clear()  # 推过一关后，之前未解锁的关卡可能已经解锁
+            if locked:
+                # 推过一关后，之前未解锁的关卡可能已经解锁；它们可能在游标左边，所以不带游标重新找
+                locked.clear()
+                cursor = None
             last_scroll = None
+            rewound = False
             self.close_map_panel()
 
 

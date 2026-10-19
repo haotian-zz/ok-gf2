@@ -98,6 +98,15 @@ def parse_time_option(option: str) -> list[float]:
     return [float(x) for x in option.split("-")]
 
 
+def parse_deploy_count(text):
+    """「3/4」→ (3, 4)。斜杠常被 OCR 读成 1/l/I（如 '414'、'3l4'），单独一个三字符的也接受。"""
+    if m := re.search(r"(\d)\s*[/|\\]\s*(\d)", text):
+        return int(m.group(1)), int(m.group(2))
+    if m := re.fullmatch(r"(\d)[1lI](\d)", text.strip()):
+        return int(m.group(1)), int(m.group(2))
+    return None
+
+
 class BaseGfTask(RuntimeMixin, BaseTask):
     """任务基类：RuntimeMixin 提供模板匹配入口重写，BaseTask 提供框架能力。"""
 
@@ -298,8 +307,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             boxes = self._ocr_panel(COUNT_BOX)
             self.log_info(f"顶部计数区文字: {[b.name for b in boxes]}", notify=False)
             for b in boxes:
-                if m := re.search(r"(\d)\s*[/|\\]\s*(\d)", b.name):
-                    return int(m.group(1)), int(m.group(2))
+                if m := parse_deploy_count(b.name):
+                    return m
             self.sleep(0.3)
             self.next_frame()
         return None
