@@ -300,6 +300,23 @@ class TestSupportSelect(unittest.TestCase):
         x, y = far_point(tiles, 1280, 768)
         self.assertTrue(all(((x * 1280 - t["center"][0]) ** 2 + (y * 768 - t["center"][1]) ** 2) ** 0.5 > 150 for t in tiles))
 
+    def test_find_unit_tags(self):
+        import cv2
+
+        from src.core.support_select import find_unit_tags, unit_tiles_from_tags
+
+        one = cv2.imread(str(self.FIXTURE.parent / "deploy_one_empty_1280x768.jpg"))
+        tags = find_unit_tags(one, 1280, 768)
+        for want in [(773, 461), (705, 398), (781, 356), (623, 445)]:
+            self.assertTrue(any(abs(x - want[0]) <= 6 and abs(y - want[1]) <= 6 for x, y, _ in tags), (want, tags))
+        self.assertLessEqual(len(tags), 6, tags)
+        tiles = unit_tiles_from_tags(tags, 768)
+        self.assertEqual(len(tiles), len(tags))
+        self.assertTrue(all(abs(ty - y - 0.083 * 768) < 1 for (x, y, _), (tx, ty) in zip(tags, tiles)))
+
+        row = cv2.imread(str(self.FIXTURE.parent / "deploy_empty_row_1280x768.jpg"))
+        self.assertEqual(find_unit_tags(row, 1280, 768), [])
+
     def test_empty_tiles(self):
         tiles = [
             {"center": (182, 365), "bbox": (121, 331, 126, 71)},  # 头顶有 3

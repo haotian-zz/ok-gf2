@@ -19,6 +19,8 @@ from src.core.support_select import (
     far_point,
     filter_point,
     find_deploy_tiles,
+    find_unit_tags,
+    unit_tiles_from_tags,
     find_cards,
     find_tiles,
     identify_cards,
@@ -281,12 +283,15 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return ok
 
     def _deploy_count(self):
-        """顶部「部署人形 3/4」，返回 (3, 4)；读不到返回 None。"""
-        boxes = self._ocr_panel(COUNT_BOX)
-        self.log_info(f"顶部计数区文字: {[b.name for b in boxes]}", notify=False)
-        for b in boxes:
-            if m := re.search(r"(\d)\s*[/|\\]\s*(\d)", b.name):
-                return int(m.group(1)), int(m.group(2))
+        """顶部「部署人形 3/4」，返回 (3, 4)；读不到就换一帧再试一次，还读不到返回 None。"""
+        for attempt in range(2):
+            boxes = self._ocr_panel(COUNT_BOX)
+            self.log_info(f"顶部计数区文字: {[b.name for b in boxes]}", notify=False)
+            for b in boxes:
+                if m := re.search(r"(\d)\s*[/|\\]\s*(\d)", b.name):
+                    return int(m.group(1)), int(m.group(2))
+            self.sleep(0.3)
+            self.next_frame()
         return None
 
     def _click_tab(self, name):
@@ -306,13 +311,13 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return name
 
     def _unit_tiles(self):
-        """地图上已上场单位所在的格子：先按编号标签（点编号下方），再按填充率低（被立绘挡住）的地格。"""
-        digits = [b for b in self.ocr(*MAP_BOX, match=re.compile(r"^\d$")) if 1 <= int(b.name) <= 6]
-        out = [((b.x + b.width / 2, b.y + b.height / 2 + 0.07 * self.height), f"{b.name}号单位") for b in digits]
+        """地图上已上场单位所在的格子：编号标签下方的格子优先，再用填充率低（被立绘挡住）的地格兜底。"""
+        occupied, _ = self._occupied_and_empty()
+        out = [(c, f"标签下的地格({int(c[0])},{int(c[1])})") for c in occupied]
         for t in reversed(find_deploy_tiles(self.frame, self.width, self.height)):
-            if all((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 >= 40**2 for (x, y), _ in out):
+            if all((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 >= 45**2 for (x, y), _ in out):
                 out.append((t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])}, 填充 {t['fill']})"))
-        return out[:8]
+        return out[:6]
 
     def _select_unit_on_map(self, want):
         """点地图上的单位格子，直到左下角名字是 want。点中单位后右侧面板会切回「我的人形」。"""
@@ -352,18 +357,30 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.log_info(f"取消地图选中（点 {x:.2f},{y:.2f}），按钮状态 {kind}", notify=False)
         return kind not in ("withdraw", "blocked")
 
+    def _occupied_and_empty(self):
+        """(有人的地格列表, 空地格列表)：有人的按编号标签定位，空的用菱形模板找并排除标签附近的。"""
+        tags = find_unit_tags(self.frame, self.width, self.height)
+        occupied = unit_tiles_from_tags(tags, self.height)
+        tiles = find_deploy_tiles(self.frame, self.width, self.height)
+        near = lambda t: any((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 < 45**2 for x, y in occupied)
+        empty = [t for t in tiles if not near(t)]
+        self.log_info(f"单位标签 {[(x, y, sc) for x, y, sc in tags]}，空地格 {[(t['center'], t['fill']) for t in empty]}", notify=False)
+        return occupied, empty
+
     def _candidate_tiles(self):
         """
-        选中卡片后可以试着点的地格，按优先级排序：填充率高（没人站着）的空地格在前；
-        阵容满了（顶替）时反过来，有人站着的格子在前。
+        选中卡片后可以试着点的地格：阵容没满就点空地格（填充率高的在前）；满了（顶替）就点有人的格子。
         """
         count = self._deploy_count()
-        tiles = find_deploy_tiles(self.frame, self.width, self.height)
+        occupied, empty = self._occupied_and_empty()
         self.debug_shot("tiles")
-        if count is not None and count[0] >= count[1]:
-            tiles = list(reversed(tiles))
-        self.log_info(f"阵容 {count}，地格 {[(t['center'], t['fill']) for t in tiles]}", notify=False)
-        return [(t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])}, 填充 {t['fill']})") for t in tiles[:6]]
+        full = count is not None and count[0] >= count[1]
+        if full:
+            out = [(c, f"有人的地格({int(c[0])},{int(c[1])})") for c in occupied]
+        else:
+            out = [(t["center"], f"空地格({int(t['center'][0])},{int(t['center'][1])}, 填充 {t['fill']})") for t in empty]
+        self.log_info(f"阵容 {count}，候选地格 {len(out)} 个", notify=False)
+        return out[:4]
 
     def _placed(self, card_name, before):
         """核对是否上场：按钮是「撤回人形」且左下角名字就是这张卡，或者计数涨了。"""
@@ -548,7 +565,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         cards = self._scan_cards()
         self.debug_shot("support_scan_all", [c["power_box"] for c in cards])
         self.log_info(f"兜底借战力最高：全部列表 {[(c['name'], c['badge'], c['power']) for c in cards]}", notify=False)
-        for c in cards[:6]:
+        deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
+        if deployed:
+            # 列表里有打了勾的卡片 = 上一关借的助战还在场上，不用再借
+            self.log_info(f"已有助战在场上 {[(c['name'], c['power']) for c in deployed]}，不再换", notify=True)
+            return True
+        for c in cards[:3]:
             x, y = c["center"]
             name = self._click_card(c)
             if self._deploy_selected_support(

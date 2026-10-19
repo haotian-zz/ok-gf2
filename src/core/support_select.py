@@ -414,3 +414,52 @@ def far_point(tiles, width, height, candidates=((0.45, 0.30), (0.30, 0.50), (0.6
         if d > best_d:
             best, best_d = (cx, cy), d
     return best
+
+
+# ---------------- 单位编号标签 ----------------
+# 已上场单位头顶有个深色小方块（白边、白色数字），标签中心往下约 0.083 画面高就是它站的地格中心。
+UNIT_TAG_DY = 0.083
+UNIT_TAG_SCORE = 0.6
+
+
+def find_unit_tags(frame, width, height, max_n=8):
+    """返回 [(x, y, score), ...]，按匹配度从高到低。OCR 认不准这种小数字，用「深色方块 + 白边」的模板找。"""
+    if frame is None:
+        return []
+    s = height / 768
+    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    gray = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    best = None
+    for n0, b in ((17, 1), (19, 2), (21, 2)):
+        n = int(round(n0 * s)) | 1
+        if gray.shape[0] <= n or gray.shape[1] <= n:
+            continue
+        tpl = np.full((n, n), 235, np.uint8)
+        tpl[b : n - b, b : n - b] = 60
+        c = n // 2
+        tpl[c - 4 : c + 4, c - 1 : c + 2] = 220  # 中间一竖代表数字
+        res = cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED)
+        res = cv2.copyMakeBorder(
+            res, n // 2, gray.shape[0] - res.shape[0] - n // 2, n // 2, gray.shape[1] - res.shape[1] - n // 2, cv2.BORDER_CONSTANT, value=0
+        )
+        best = res if best is None else np.maximum(best, res)
+    if best is None:
+        return []
+    out = []
+    r = int(9 * s)
+    for _ in range(max_n):
+        _, mx, _, (x, y) = cv2.minMaxLoc(best)
+        if mx < UNIT_TAG_SCORE:
+            break
+        cv2.rectangle(best, (x - 14, y - 14), (x + 14, y + 14), 0, -1)
+        if y - r < 0 or x - r < 0 or y + r >= gray.shape[0] or x + r >= gray.shape[1]:
+            continue
+        inner = gray[y - 5 : y + 6, x - 5 : x + 6]
+        ring = np.concatenate([gray[y - r, x - r : x + r + 1], gray[y + r, x - r : x + r + 1], gray[y - r : y + r + 1, x - r], gray[y - r : y + r + 1, x + r]])
+        if np.median(inner) < 120 and np.percentile(ring, 60) > 140:
+            out.append((x0 + x, y0 + y, round(float(mx), 2)))
+    return out
+
+
+def unit_tiles_from_tags(tags, height):
+    return [(x, y + UNIT_TAG_DY * height) for x, y, _ in tags]
