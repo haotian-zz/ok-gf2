@@ -344,24 +344,51 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             if role not in name:
                 self.log_info(f"{c['badge']}椎 战力{c['power']} 是 {name}，不是 {role}，跳过", notify=False)
                 continue
-            kind, button = self._deploy_button()
-            if kind == "withdraw":
-                self.log_info(f"{c['badge']}椎 {role} 助战已在场上", notify=True)
+            if self._deploy_selected_support(f"{c['badge']}椎 {role}（战力 {c['power']}）"):
                 return True
-            if kind != "deploy":
-                self.log_info(f"选中 {role} 后没找到部署按钮，跳过", notify=False)
-                continue
-            self.click(button, after_sleep=1.5)
+        self.log_info(f"没有 {min_badge} 椎及以上的 {role} 助战", notify=True)
+        if self.config.get("找不到就借战力最高", False):
+            return self._pick_strongest_support(tab)
+        self.log_info("不借，直接开战", notify=True)
+        return False
+
+    def _deploy_selected_support(self, label):
+        """当前已选中一张助战卡片：按钮是「撤回」说明已在场上；是「部署」就点，确认上场后返回 True。"""
+        kind, button = self._deploy_button()
+        if kind == "withdraw":
+            self.log_info(f"{label} 助战已在场上", notify=True)
+            return True
+        if kind != "deploy":
+            self.log_info(f"选中 {label} 后没找到部署按钮，跳过", notify=False)
+            return False
+        self.click(button, after_sleep=1.5)
+        self.next_frame()
+        if confirm := self.ocr(match=self.fix_match_regex(["确认"]), box=self.box.bottom):
+            self.click(confirm, after_sleep=1.5)
             self.next_frame()
-            if confirm := self.ocr(match=self.fix_match_regex(["确认"]), box=self.box.bottom):
-                self.click(confirm, after_sleep=1.5)
-                self.next_frame()
-            kind, _ = self._deploy_button()
-            if kind == "withdraw":
-                self.log_info(f"已借 {c['badge']}椎 {role} 助战（战力 {c['power']}）", notify=True)
+        kind, _ = self._deploy_button()
+        if kind == "withdraw":
+            self.log_info(f"已借 {label} 助战", notify=True)
+            return True
+        self.log_info(f"{label} 点了部署但没确认上场，换下一张", notify=False)
+        return False
+
+    def _pick_strongest_support(self, tab):
+        """兜底：切到「全部」筛选，按战力从高到低借第一个能部署的助战。"""
+        fx, fy = filter_point(tab, "全部", self.width, self.height)
+        self.click_relative(fx / self.width, fy / self.height, after_sleep=1)
+        self.next_frame()
+        cards = self._scan_cards()
+        self.debug_shot("support_scan_all", [c["power_box"] for c in cards])
+        self.log_info(f"兜底借战力最高：全部列表 {[(c['badge'], c['power']) for c in cards]}", notify=False)
+        for c in cards[:6]:
+            x, y = c["center"]
+            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+            self.next_frame()
+            name = self._selected_role_name()
+            if self._deploy_selected_support(f"战力最高 {name}（{c['badge']}椎 战力 {c['power']}）"):
                 return True
-            self.log_info(f"点了部署但没确认上场，换下一张", notify=False)
-        self.log_info(f"没有 {min_badge} 椎及以上的 {role} 助战，不借，直接开战", notify=True)
+        self.log_info("兜底也没借到助战，直接开战", notify=True)
         return False
 
     def fill_lineup(self, max_rounds=4):
