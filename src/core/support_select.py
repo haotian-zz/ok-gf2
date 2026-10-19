@@ -188,8 +188,8 @@ def find_tiles(frame, width, height):
     x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
     region = frame[y0:y1, x0:x1]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, (85, 15, 150), (115, 200, 255))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    # 地格之间是白色细边（饱和度很低），不做闭运算，否则相邻地格会连成一块
+    mask = cv2.inRange(hsv, (85, 30, 150), (115, 200, 255))
     n, _, stats, cents = cv2.connectedComponentsWithStats(mask)
     s = height / 768
     tiles = []
