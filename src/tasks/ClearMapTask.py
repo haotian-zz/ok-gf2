@@ -160,6 +160,13 @@ class ClearMapTask(BaseGfTask):
 
         self.log_info("推图开始", notify=False)
 
+        self.next_frame()
+        if self.ocr(match="作战开始", box=self.box.bottom):
+            # 上次停在部署界面（比如手动停止后再启动），先把这一关打完再回到选关页面继续
+            self.log_info("当前在部署界面，先打完这一关再继续推图", notify=True)
+            self.auto_battle(end_match=map_re, has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False))
+            self.close_map_panel()
+
         ordered = self.scan_maps()
         if not ordered:
             raise Exception("未找到要推的图! 请停在关卡选择页面再启动")

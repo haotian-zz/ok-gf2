@@ -244,8 +244,10 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
     def _deploy_count(self):
         """顶部「部署人形 3/4」，返回 (3, 4)；读不到返回 None。"""
-        for b in self._ocr_panel(COUNT_BOX):
-            if m := re.search(r"(\d)\s*/\s*(\d)", b.name):
+        boxes = self._ocr_panel(COUNT_BOX)
+        self.log_info(f"顶部计数区文字: {[b.name for b in boxes]}", notify=False)
+        for b in boxes:
+            if m := re.search(r"(\d)\s*[/|\\]\s*(\d)", b.name):
                 return int(m.group(1)), int(m.group(2))
         return None
 
@@ -258,10 +260,15 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return tab[0]
 
     def _selected_role_name(self):
-        return "".join(b.name for b in self._ocr_panel(NAME_BOX))
+        boxes = self._ocr_panel(NAME_BOX)
+        name = "".join(b.name for b in boxes)
+        self.log_info(f"左下角人形名: {name!r}", notify=False)
+        return name
 
     def _deploy_button(self):
-        for b in self._ocr_panel(BUTTON_BOX):
+        boxes = self._ocr_panel(BUTTON_BOX)
+        self.log_info(f"右下角按钮: {[b.name for b in boxes]}", notify=False)
+        for b in boxes:
             if "部署" in b.name:
                 return "deploy", b
             if "撤回" in b.name:
@@ -321,6 +328,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.next_frame()
         cards = self._scan_cards()
         self.debug_shot("support_scan", [c["power_box"] for c in cards])
+        if not cards and self.ocr(match=self.fix_match_regex(["暂无可选择人形"])):
+            self.log_info("好友助战列表为空（暂无可选择人形），通常是我方已上场同名角色没撤回", notify=True)
         candidates = pick_candidates(cards, min_badge)
         self.log_info(
             f"好友助战({attr or '全部'}) 识别 {len(cards)} 张 {[(c['badge'], c['power']) for c in cards]}，"
