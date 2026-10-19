@@ -94,11 +94,13 @@ def popup_texts(boxes, title_box, height):
     return out
 
 
-def watchdog_message(stalled, executor_paused, task_paused, where):
-    """看门狗报警文案：先区分是人为暂停还是真卡住。"""
+def watchdog_message(stalled, executor_paused, task_paused, where, window_hidden=False):
+    """看门狗报警文案：先区分是游戏窗口被最小化、人为暂停，还是真卡住。"""
     secs = int(stalled)
     if task_paused:
         return f"任务已暂停 {secs} 秒（任务卡片上的「暂停」按钮），点「开始」继续"
+    if executor_paused and window_hidden:
+        return f"游戏窗口被最小化或移出了屏幕，程序已暂停 {secs} 秒；把游戏窗口恢复出来就会自动继续（被别的窗口挡住没关系，不能最小化）"
     if executor_paused:
         return f"程序已暂停 {secs} 秒（F9 热键或顶部的暂停按钮），按 F9 或点「开始」继续"
     return f"{secs} 秒没有任何进展，卡在 {where}"
@@ -224,8 +226,36 @@ class BaseGfTask(RuntimeMixin, BaseTask):
     _progress_ts = 0.0
     _watchdog_stop_event = None
 
+    _last_frame = None
+    _paused_by_window = False
+
     def _touch_progress(self):
         self._progress_ts = time.time()
+        frame = getattr(self.executor, "_frame", None)
+        if frame is not None:
+            self._last_frame = frame
+
+    def _game_window_hidden(self):
+        """游戏窗口被最小化/移出屏幕（ok-script 这时会暂停执行器，而且窗口恢复后不会自己继续）。"""
+        hw = getattr(getattr(self.executor, "device_manager", None), "hwnd_window", None)
+        return hw is not None and not getattr(hw, "pos_valid", True)
+
+    def _resume_if_window_back(self):
+        """
+        实录：游戏窗口被最小化时 ok-script 会把执行器暂停并弹「Paused because game window is minimized」，
+        但窗口恢复后它不会自动继续，任务看起来像"自己结束了"。这里记住暂停是窗口引起的，窗口一回来就自动继续。
+        """
+        executor_paused = bool(getattr(self.executor, "paused", False))
+        if executor_paused and self._game_window_hidden():
+            self._paused_by_window = True
+            return
+        if self._paused_by_window and executor_paused and not getattr(self, "_paused", False) and not self._game_window_hidden():
+            logger.info("[看门狗] 游戏窗口恢复了，自动继续被最小化打断的任务")
+            self._paused_by_window = False
+            self.executor.start()
+            self._touch_progress()
+        elif not executor_paused:
+            self._paused_by_window = False
 
     def log_info(self, message, notify=False, *args, **kwargs):
         self._touch_progress()
@@ -259,6 +289,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         reported = 0
         while not stop_event.wait(5):
             try:
+                self._resume_if_window_back()
                 stalled = time.time() - self._progress_ts
                 if stalled < timeout:
                     reported = 0
@@ -284,17 +315,20 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         executor_paused = bool(getattr(self.executor, "paused", False))
         task_paused = bool(getattr(self, "_paused", False))
         where = self._executor_where()
-        msg = watchdog_message(stalled, executor_paused, task_paused, where)
+        msg = watchdog_message(stalled, executor_paused, task_paused, where, self._game_window_hidden() or self._paused_by_window)
         path = None
         try:
-            path = save_debug_shot(getattr(self.executor, "_frame", None), self.name, f"watchdog_{level}")
+            frame = getattr(self.executor, "_frame", None)
+            path = save_debug_shot(frame if frame is not None else self._last_frame, self.name, f"watchdog_{level}")
         except Exception as e:
             logger.warning(f"看门狗截图失败: {e}")
         logger.warning(f"[看门狗] {msg}；截图 {path}")
-        try:
-            self.notification(msg, error=True, tray=True)
-        except Exception as e:
-            logger.warning(f"看门狗通知失败: {e}")
+        if level == 1 or not (executor_paused or task_paused):
+            # 暂停状态只在第一次提醒一次，别每两分钟弹一回
+            try:
+                self.notification(msg, error=True, tray=True)
+            except Exception as e:
+                logger.warning(f"看门狗通知失败: {e}")
         if not executor_paused and not task_paused and level >= WATCHDOG_KILL_LEVEL:
             logger.error(f"[看门狗] 持续 {int(stalled)} 秒无进展，自动停止任务")
             self.info["Error"] = f"{int(stalled)} 秒没有进展，看门狗已停止任务，看日志里的 [看门狗] 和 watchdog 截图"

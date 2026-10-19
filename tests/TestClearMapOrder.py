@@ -252,6 +252,9 @@ class TestWatchdog(unittest.TestCase):
         # 实录：推图卡片的「暂停」按钮被点到，执行线程在 ok-script 的 sleep 里空转 6 分钟，界面上还显示「运行中」
         self.assertIn("任务已暂停", watchdog_message(360, False, True, "x"))
         self.assertIn("F9", watchdog_message(130, True, False, "x"))
+        # 实录：游戏窗口被最小化时 ok-script 暂停执行器，恢复窗口后不会自己继续
+        self.assertIn("最小化", watchdog_message(130, True, False, "x", window_hidden=True))
+        self.assertNotIn("F9", watchdog_message(130, True, False, "x", window_hidden=True))
         self.assertIn("卡在 TaskExecutor.py:385 sleep", watchdog_message(130, False, False, "TaskExecutor.py:385 sleep"))
 
     def test_describe_screen(self):
