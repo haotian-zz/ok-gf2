@@ -780,13 +780,17 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 self.log_info(f"体力弹窗页签{idx + 1} 没找到确认按钮，跳过", notify=False)
                 continue
             self.click(confirm[0], after_sleep=2)
-            self.next_frame()
-            boxes = self.ocr()
-            if not self.find_boxes(boxes, match=stamina_popup_re):
-                self.log_info(f"已用体力弹窗页签{idx + 1} 恢复体力（数量 {count}）", notify=True)
-                self.debug_shot("stamina_restored", boxes)
-                return True
+            # 确认后弹窗要过一会儿才关（实录：接入密钥已经扣了，2 秒后标题还在，误判成失败又点了取消）
+            for _ in range(4):
+                self.next_frame()
+                boxes = self.ocr()
+                if not self.find_boxes(boxes, match=stamina_popup_re):
+                    self.log_info(f"已用体力弹窗页签{idx + 1} 恢复体力（数量 {count}）", notify=True)
+                    self.debug_shot("stamina_restored", boxes)
+                    return True
+                self.sleep(1)
             self.log_info(f"体力弹窗页签{idx + 1} 确认后弹窗仍在，换下一个页签", notify=False)
+            self.debug_shot(f"stamina_tab{idx + 1}_after_confirm", boxes)
         self._cancel_stamina_popup()
         return False
 
