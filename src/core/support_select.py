@@ -358,3 +358,59 @@ def identify_cards(frame, cards, width, height, book):
         crop = avatar_crop(frame, c["power_box"], width, height, margin=AVATAR_MARGIN)
         c["name"], c["name_score"] = book.match(crop)
     return cards
+
+
+# ---------------- 地格识别 v2：菱形模板 ----------------
+# 地格是亮蓝色菱形（约 110x84 @1280x768），相邻地格只隔一条白边，连通域会粘在一起，
+# 所以改用菱形核在蓝色掩码上做归一化相关找中心；「填充率」= 菱形内蓝色像素占比，空地格接近 1，
+# 站了人的地格被立绘挡掉一块，填充率明显更低。
+TILE_HSV = ((98, 40, 150), (122, 255, 255))  # 空地格会呼吸变暗（V 可低到 160、S 到 50），青绿色地板靠色相（87~95）排除
+TILE_KERNEL = (110, 84)
+TILE_MIN_SCORE = 0.65
+TILE_EMPTY_FILL = 0.85
+
+
+def _diamond(kw, kh):
+    ker = np.zeros((kh, kw), np.float32)
+    ys, xs = np.mgrid[0:kh, 0:kw]
+    ker[(np.abs(xs + 0.5 - kw / 2) / (kw / 2) + np.abs(ys + 0.5 - kh / 2) / (kh / 2)) <= 1] = 1
+    return ker
+
+
+def find_deploy_tiles(frame, width, height, max_n=12):
+    """
+    返回 [{"center": (x, y), "score": 菱形匹配度, "fill": 填充率}, ...]，按填充率从高到低（空地格在前）。
+    """
+    if frame is None:
+        return []
+    s = height / 768
+    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, TILE_HSV[0], TILE_HSV[1]).astype(np.float32) / 255
+    kw, kh = int(TILE_KERNEL[0] * s), int(TILE_KERNEL[1] * s)
+    if mask.shape[0] <= kh or mask.shape[1] <= kw:
+        return []
+    ker = _diamond(kw, kh)
+    res = cv2.matchTemplate(mask, ker, cv2.TM_CCORR_NORMED)
+    fill = cv2.filter2D(mask, -1, ker / ker.sum(), borderType=cv2.BORDER_CONSTANT)
+    out = []
+    for _ in range(max_n):
+        _, mx, _, loc = cv2.minMaxLoc(res)
+        if mx < TILE_MIN_SCORE:
+            break
+        x, y = loc[0] + kw // 2, loc[1] + kh // 2
+        out.append({"center": (x0 + x, y0 + y), "score": round(float(mx), 2), "fill": round(float(fill[y, x]), 2)})
+        # 相邻地格中心相距约 (kw/2, kh/2)，压制范围要比这小
+        cv2.rectangle(res, (loc[0] - int(kw * 0.45), loc[1] - int(kh * 0.45)), (loc[0] + int(kw * 0.45), loc[1] + int(kh * 0.45)), 0, -1)
+    out.sort(key=lambda t: -t["fill"])
+    return out
+
+
+def far_point(tiles, width, height, candidates=((0.45, 0.30), (0.30, 0.50), (0.60, 0.22), (0.25, 0.30), (0.55, 0.60))):
+    """地图上离所有地格都远的一个点（相对坐标），用来点一下取消选中。"""
+    best, best_d = candidates[0], -1
+    for cx, cy in candidates:
+        d = min([((cx * width - t["center"][0]) ** 2 + (cy * height - t["center"][1]) ** 2) ** 0.5 for t in tiles] or [1e9])
+        if d > best_d:
+            best, best_d = (cx, cy), d
+    return best

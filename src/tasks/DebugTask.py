@@ -16,6 +16,7 @@ class DebugTask(BaseGfTask):
         self.default_config.update(
             {
                 "点击文字": "",
+                "点击坐标": "",
                 "按ESC次数": 0,
                 "截图并OCR": False,
                 "调试截图": True,
@@ -24,6 +25,7 @@ class DebugTask(BaseGfTask):
         self.config_description.update(
             {
                 "点击文字": "非空时用 OCR 找到这个文字并点击（支持正则），找不到就报错",
+                "点击坐标": "非空时点击这个相对坐标，格式 x,y（0~1），如 0.3,0.5",
                 "按ESC次数": "点击之后再按几次 ESC",
                 "截图并OCR": "把当前画面全部 OCR 一遍，文字写进日志，截图存到 screenshots/调试工具/",
             }
@@ -37,6 +39,11 @@ class DebugTask(BaseGfTask):
                 raise Exception(f"没找到文字: {text}")
             self.log_info(f"点击 {box[0].name} at {box[0].center()}", notify=True)
             self.click(box, after_sleep=1.5)
+        coord = (self.config.get("点击坐标") or "").strip()
+        if coord:
+            x, y = (float(v) for v in coord.split(","))
+            self.log_info(f"点击相对坐标 ({x}, {y})", notify=True)
+            self.click_relative(x, y, after_sleep=1.5)
         for _ in range(int(self.config.get("按ESC次数") or 0)):
             self.back(after_sleep=1.5)
         if self.config.get("截图并OCR"):

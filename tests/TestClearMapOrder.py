@@ -280,6 +280,26 @@ class TestSupportSelect(unittest.TestCase):
             self.assertFalse(book.learn("春田", crop))
             self.assertEqual(AvatarBook(d).match(crop)[0], "春田")
 
+    def test_find_deploy_tiles(self):
+        import cv2
+
+        from src.core.support_select import TILE_EMPTY_FILL, far_point, find_deploy_tiles
+
+        row = cv2.imread(str(self.FIXTURE.parent / "deploy_empty_row_1280x768.jpg"))
+        tiles = find_deploy_tiles(row, 1280, 768)
+        good = [t for t in tiles if t["fill"] >= TILE_EMPTY_FILL]
+        self.assertEqual(len(good), 4, tiles)
+        for want in [(721, 492), (650, 553), (849, 397), (789, 443)]:
+            self.assertTrue(any(abs(t["center"][0] - want[0]) <= 12 and abs(t["center"][1] - want[1]) <= 12 for t in good), (want, tiles))
+
+        one = cv2.imread(str(self.FIXTURE.parent / "deploy_one_empty_1280x768.jpg"))
+        tiles = find_deploy_tiles(one, 1280, 768)
+        self.assertLessEqual(abs(tiles[0]["center"][0] - 843), 12, tiles)
+        self.assertLessEqual(abs(tiles[0]["center"][1] - 491), 12, tiles)
+        self.assertGreaterEqual(tiles[0]["fill"], 0.95)
+        x, y = far_point(tiles, 1280, 768)
+        self.assertTrue(all(((x * 1280 - t["center"][0]) ** 2 + (y * 768 - t["center"][1]) ** 2) ** 0.5 > 150 for t in tiles))
+
     def test_empty_tiles(self):
         tiles = [
             {"center": (182, 365), "bbox": (121, 331, 126, 71)},  # 头顶有 3

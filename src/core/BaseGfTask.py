@@ -16,7 +16,9 @@ from src.core.support_select import (
     TAB_BOX,
     check_point,
     empty_tiles,
+    far_point,
     filter_point,
+    find_deploy_tiles,
     find_cards,
     find_tiles,
     identify_cards,
@@ -304,13 +306,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return name
 
     def _unit_tiles(self):
-        """地图上已上场单位所在的格子：先按编号标签（点编号下方），再按泛蓝地格兜底。"""
+        """地图上已上场单位所在的格子：先按编号标签（点编号下方），再按填充率低（被立绘挡住）的地格。"""
         digits = [b for b in self.ocr(*MAP_BOX, match=re.compile(r"^\d$")) if 1 <= int(b.name) <= 6]
         out = [((b.x + b.width / 2, b.y + b.height / 2 + 0.07 * self.height), f"{b.name}号单位") for b in digits]
-        tiles = find_tiles(self.frame, self.width, self.height)
-        for t in order_tiles(tiles, [], self.height):
+        for t in reversed(find_deploy_tiles(self.frame, self.width, self.height)):
             if all((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 >= 40**2 for (x, y), _ in out):
-                out.append((t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])})"))
+                out.append((t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])}, 填充 {t['fill']})"))
         return out[:8]
 
     def _select_unit_on_map(self, want):
@@ -321,6 +322,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             if want in self._selected_role_name() and self._deploy_button()[0] == "withdraw":
                 self.log_info(f"在地图上选中了 {want}（{desc}）", notify=False)
                 return True
+            self._clear_selection()
         return False
 
     def _deploy_button(self):
@@ -335,30 +337,33 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         for b in boxes:
             if "地格" in b.name or "拖拽" in b.name:
                 return "hint", b
+            if "无法" in b.name:
+                # 「无法在该点位部署」「该人形无法撤回」：地图上还挂着上一次点的格子/单位，要先取消选中
+                return "blocked", b
         return None, None
+
+    def _clear_selection(self):
+        """点一下地图上离地格很远的空地，取消地图上挂着的格子/单位选中（否则后面点卡片会变成「无法在该点位部署」）。"""
+        tiles = find_deploy_tiles(self.frame, self.width, self.height)
+        x, y = far_point(tiles, self.width, self.height)
+        self.click_relative(x, y, after_sleep=0.8)
+        self.next_frame()
+        kind, _ = self._deploy_button()
+        self.log_info(f"取消地图选中（点 {x:.2f},{y:.2f}），按钮状态 {kind}", notify=False)
+        return kind not in ("withdraw", "blocked")
 
     def _candidate_tiles(self):
         """
-        选中卡片后可以试着点的地格，按优先级排序：
-        阵容满了先点编号最大的已上场单位（顶替它）；否则没人压着、颜色更蓝的地格优先，剩下的也排在后面兜底。
-        单位编号 OCR 经常漏，所以不把「有没有编号」当硬条件，只用来排序。
+        选中卡片后可以试着点的地格，按优先级排序：填充率高（没人站着）的空地格在前；
+        阵容满了（顶替）时反过来，有人站着的格子在前。
         """
         count = self._deploy_count()
-        digits = [b for b in self.ocr(*MAP_BOX, match=re.compile(r"^\d$")) if 1 <= int(b.name) <= 6]
-        bright = find_tiles(self.frame, self.width, self.height, strict=True)
-        loose = find_tiles(self.frame, self.width, self.height)
-        self.debug_shot("tiles", digits)
-        out = []
-        if count is not None and count[0] >= count[1] and digits:
-            tag = max(digits, key=lambda b: int(b.name))
-            out.append(((tag.x + tag.width / 2, tag.y + tag.height / 2 + 0.07 * self.height), f"{tag.name}号单位的格子"))
-        ordered = merge_tiles(order_tiles(bright, digits, self.height), order_tiles(loose, digits, self.height))
-        for t in ordered:
-            out.append((t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])}, 饱和度 {int(t.get('sat', 0))})"))
-        self.log_info(
-            f"阵容 {count}，亮蓝地格 {len(bright)} 个，泛蓝地格 {len(loose)} 个，单位编号 {[d.name for d in digits]}", notify=False
-        )
-        return out[:8]
+        tiles = find_deploy_tiles(self.frame, self.width, self.height)
+        self.debug_shot("tiles")
+        if count is not None and count[0] >= count[1]:
+            tiles = list(reversed(tiles))
+        self.log_info(f"阵容 {count}，地格 {[(t['center'], t['fill']) for t in tiles]}", notify=False)
+        return [(t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])}, 填充 {t['fill']})") for t in tiles[:6]]
 
     def _placed(self, card_name, before):
         """核对是否上场：按钮是「撤回人形」且左下角名字就是这张卡，或者计数涨了。"""
@@ -383,15 +388,23 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if kind == "withdraw" and card_name in self._selected_role_name():
             self.log_info(f"{label} 已在场上", notify=True)
             return True
+        if kind in ("withdraw", "blocked") and reselect:
+            # 地图上还挂着别的格子/单位，先取消再重选这张卡
+            self._clear_selection()
+            reselect()
+            self.next_frame()
+            kind, button = self._deploy_button()
         if kind == "hint":
             candidates = self._candidate_tiles()
             if not candidates:
                 self.log_info(f"{label} 需要先点地格，但没找到可点的地格", notify=False)
                 return False
             for i, (tile, desc) in enumerate(candidates):
-                if i > 0 and reselect:
-                    reselect()
-                    self.next_frame()
+                if i > 0:
+                    self._clear_selection()
+                    if reselect:
+                        reselect()
+                        self.next_frame()
                 self.log_info(f"{label} 试点{desc}", notify=False)
                 self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=1)
                 self.next_frame()
@@ -401,6 +414,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 if kind == "withdraw" and card_name in self._selected_role_name():
                     self.log_info(f"已顶替上场 {label}，阵容 {self._deploy_count()}", notify=True)
                     return True
+            else:
+                # 所有地格都试完了还没出现「部署人形」，把挂着的选中清掉再返回
+                self._clear_selection()
         if kind != "deploy":
             self.log_info(f"{label} 没出现部署按钮，跳过", notify=False)
             return False
@@ -706,8 +722,21 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             if self.config.get("自动补满阵容", False):
                 self.fill_lineup()
             if self.config.get("借好友助战", False) or self.config.get("自动补满阵容", False):
+                if self._deploy_button()[0] in ("withdraw", "blocked"):
+                    self._clear_selection()
                 result = self.wait_ocr(match="作战开始", box=self.box.bottom, time_out=10, raise_if_not_found=True)
             self.click_box(result, after_sleep=1)
+            for _ in range(2):
+                # 地图上挂着选中时点「作战开始」只会把面板弹出来，战斗不会开始；清掉选中再点一次
+                self.sleep(2)
+                self.next_frame()
+                still = self.ocr(match="作战开始", box=self.box.bottom)
+                if not still:
+                    break
+                self.log_info("点了作战开始但还在部署界面，清掉选中后再点", notify=True)
+                self.debug_shot("battle_start_retry")
+                self._clear_selection()
+                self.click_box(still, after_sleep=1)
             start_result = self.skip_dialogs(
                 end_match=[
                     re.compile("行动完成"),
