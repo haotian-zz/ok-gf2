@@ -7,6 +7,7 @@ from ok import BaseTask, Box, Logger, find_boxes_by_name
 from src.core.base_mixin.runtime_mixin import RuntimeMixin
 from src.core.debug_shot import save_debug_shot
 from src.core.support_select import (
+    AvatarBook,
     BUTTON_BOX,
     COUNT_BOX,
     MAP_BOX,
@@ -18,6 +19,7 @@ from src.core.support_select import (
     filter_point,
     find_cards,
     find_tiles,
+    identify_cards,
     is_orange_check,
     merge_tiles,
     order_tiles,
@@ -239,10 +241,42 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         x, y, to_x, to_y = box
         return self.ocr(x, y, to_x, to_y, **kw)
 
+    _avatar_book = AvatarBook()
+
     def _scan_cards(self):
-        """识别右侧面板的卡片：战力数字定位卡片，蓝圈椎数用模板比对（OCR 认不出那么小的数字）。"""
+        """
+        识别右侧面板的卡片：战力数字定位卡片，蓝圈椎数用模板比对（OCR 认不出那么小的数字），
+        立绘和 assets/card_avatars 里的模板比对直接认出是谁（认不出的 name 为 None，点一下后会自动学会）。
+        """
         boxes = self._ocr_panel(PANEL_BOX, match=re.compile(r"^\d{3,6}$"))
-        return find_cards(boxes, self.width, self.height, badge_of=lambda b: read_badge(self.frame, b, self.width, self.height))
+        cards = find_cards(boxes, self.width, self.height, badge_of=lambda b: read_badge(self.frame, b, self.width, self.height))
+        identify_cards(self.frame, cards, self.width, self.height, self._avatar_book)
+        return cards
+
+    def _learn_card(self, card, name):
+        """点过卡片、OCR 到名字后，把它的立绘存成模板，下次扫描就不用再点。"""
+        if self._avatar_book.learn(name, card.get("avatar")):
+            self.log_info(f"记住了 {name} 的卡片立绘（assets/card_avatars/{name}.png）", notify=False)
+
+    def _click_card(self, card):
+        """点中一张卡片，返回左下角名字，并顺手学习立绘。"""
+        x, y = card["center"]
+        self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+        self.next_frame()
+        name = self._selected_role_name()
+        self._learn_card(card, name)
+        return name
+
+    def _ensure_panel(self):
+        """右侧卡片面板可能被点地图关掉了（页签消失），点「作战开始」左边的按钮把它打开。"""
+        if self._ocr_panel(TAB_BOX, match=self.fix_match_regex(["我的人形", "好友助战"])):
+            return True
+        self.log_info("部署面板没打开，点左下按钮打开", notify=False)
+        self.click_relative(0.37, 0.915, after_sleep=1)
+        self.next_frame()
+        ok = bool(self._ocr_panel(TAB_BOX, match=self.fix_match_regex(["我的人形", "好友助战"])))
+        self.debug_shot("panel_open" if ok else "panel_open_fail")
+        return ok
 
     def _deploy_count(self):
         """顶部「部署人形 3/4」，返回 (3, 4)；读不到返回 None。"""
@@ -395,6 +429,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if not self.ocr(match="作战开始", box=self.box.bottom):
             self.log_info("不在部署界面，跳过借助战", notify=False)
             return False
+        if not self._ensure_panel():
+            self.log_info("打不开部署面板，跳过借助战", notify=True)
+            return False
         try:
             self._withdraw_own(role)
             return self._pick_friend_support(role, min_badge)
@@ -409,12 +446,13 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         cards = self._scan_cards()
         deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
         self.debug_shot("support_my_tab", [c["power_box"] for c in deployed])
-        self.log_info(f"我的人形已上场 {len(deployed)} 张卡片", notify=False)
+        self.log_info(f"我的人形已上场 {len(deployed)} 张卡片 {[(c['name'], c['power']) for c in deployed]}", notify=False)
+        if not any(c["name"] is None or role in c["name"] for c in deployed):
+            return False
         for c in deployed:
-            x, y = c["center"]
-            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
-            self.next_frame()
-            name = self._selected_role_name()
+            if c["name"] and role not in c["name"]:
+                continue
+            name = self._click_card(c)
             if role not in name:
                 continue
             kind, button = self._deploy_button()
@@ -444,16 +482,17 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if not cards and self.ocr(match=self.fix_match_regex(["暂无可选择人形"])):
             self.log_info("好友助战列表为空（暂无可选择人形），通常是我方已上场同名角色没撤回", notify=True)
         candidates = pick_candidates(cards, min_badge)
+        # 立绘认出来是别人的直接跳过；认出来就是目标的优先，认不出的再点一下确认
+        candidates = [c for c in candidates if c["name"] is None or role in c["name"]]
+        candidates.sort(key=lambda c: (c["name"] is None, -c["power"]))
         self.log_info(
-            f"好友助战({attr or '全部'}) 识别 {len(cards)} 张 {[(c['badge'], c['power']) for c in cards]}，"
-            f"椎数>={min_badge} 的 {len(candidates)} 张",
+            f"好友助战({attr or '全部'}) 识别 {len(cards)} 张 {[(c['name'], c['badge'], c['power']) for c in cards]}，"
+            f"椎数>={min_badge} 且可能是 {role} 的 {len(candidates)} 张",
             notify=False,
         )
         for c in candidates:
             x, y = c["center"]
-            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
-            self.next_frame()
-            name = self._selected_role_name()
+            name = self._click_card(c)
             if role not in name:
                 self.log_info(f"{c['badge']}椎 战力{c['power']} 是 {name}，不是 {role}，跳过", notify=False)
                 continue
@@ -486,12 +525,10 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.next_frame()
         cards = self._scan_cards()
         self.debug_shot("support_scan_all", [c["power_box"] for c in cards])
-        self.log_info(f"兜底借战力最高：全部列表 {[(c['badge'], c['power']) for c in cards]}", notify=False)
+        self.log_info(f"兜底借战力最高：全部列表 {[(c['name'], c['badge'], c['power']) for c in cards]}", notify=False)
         for c in cards[:6]:
             x, y = c["center"]
-            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
-            self.next_frame()
-            name = self._selected_role_name()
+            name = self._click_card(c)
             if self._deploy_selected_support(
                 f"战力最高 {name}（{c['badge']}椎 战力 {c['power']}）", name, self._reselect_card("好友助战", x, y)
             ):
@@ -513,6 +550,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if count[0] >= count[1]:
             return True
         self.log_info(f"阵容 {count[0]}/{count[1]}，开始补满", notify=True)
+        if not self._ensure_panel():
+            self.log_info("打不开部署面板，跳过补满阵容", notify=True)
+            return False
         self._click_tab("我的人形")
         self.sleep(0.5)
         tried = set()
@@ -530,9 +570,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             card = spare[0]
             tried.add(card["power"])
             x, y = card["center"]
-            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
-            self.next_frame()
-            name = self._selected_role_name()
+            name = self._click_card(card)
             placed = self._place_selected(
                 f"我的人形 {name}（战力 {card['power']}）", name, before=count, reselect=self._reselect_card("我的人形", x, y)
             )

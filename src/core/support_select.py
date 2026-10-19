@@ -256,3 +256,105 @@ def make_check_frame(width, height, checks):
     for x, y in checks:
         frame[max(0, y - 6) : y + 7, max(0, x - 6) : x + 7] = (0, 160, 255)
     return frame
+
+
+# ---------------- 卡片头像识别（免点击认人） ----------------
+# 卡片立绘区域相对战力数字中心：左右各 0.02 画面宽，上方 0.10h ~ 0.03h（避开左上角椎数圆标和右上角橙勾）
+AVATAR_DX = 0.02
+AVATAR_Y0, AVATAR_Y1 = -0.10, -0.03
+AVATAR_REF = (52, 54)  # 统一缩放到的 (宽, 高)，1280x768 下正好是原尺寸
+AVATAR_DIR = os.path.join("assets", "card_avatars")
+AVATAR_THRESHOLD = 0.75
+_name_ok = re.compile(r"^[一-鿿A-Za-z0-9\-·]{2,12}$")
+
+
+def avatar_crop(frame, power_box, width, height, margin=0):
+    """
+    截取卡片立绘中间一块并缩放到固定尺寸，用来和模板比对。
+    :param margin: 四周多截的像素（按 1280 宽的尺度），比对时用它容忍几个像素的定位偏差
+    """
+    px = power_box.x + power_box.width / 2
+    py = power_box.y + power_box.height / 2
+    scale = width / 1280
+    m = margin * scale
+    x0, x1 = int(px - AVATAR_DX * width - m), int(px + AVATAR_DX * width + m)
+    y0, y1 = int(py + AVATAR_Y0 * height - m), int(py + AVATAR_Y1 * height + m)
+    x0, y0 = max(x0, 0), max(y0, 0)
+    crop = frame[y0:y1, x0:x1]
+    if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
+        return None
+    return cv2.resize(crop, (AVATAR_REF[0] + 2 * margin, AVATAR_REF[1] + 2 * margin), interpolation=cv2.INTER_AREA)
+
+
+AVATAR_MARGIN = 8
+
+
+def _imread_any(path):
+    data = np.fromfile(path, dtype=np.uint8)  # cv2.imread 在 Windows 上读不了中文路径
+    return cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
+
+
+def _imwrite_any(path, img):
+    ok, buf = cv2.imencode(".png", img)
+    if ok:
+        buf.tofile(path)
+    return ok
+
+
+class AvatarBook:
+    """
+    assets/card_avatars/<人形名>.png：每个人形一张卡片立绘模板。
+    第一次见到某张卡片时点一下、OCR 左下角名字并自动存模板；以后扫描卡片直接比对立绘就知道是谁，不用再点。
+    """
+
+    def __init__(self, folder=AVATAR_DIR, threshold=AVATAR_THRESHOLD):
+        self.folder = folder
+        self.threshold = threshold
+        self.templates = None
+
+    def load(self):
+        if self.templates is None:
+            self.templates = {}
+            if os.path.isdir(self.folder):
+                for fn in os.listdir(self.folder):
+                    stem, ext = os.path.splitext(fn)
+                    if ext.lower() != ".png":
+                        continue
+                    img = _imread_any(os.path.join(self.folder, fn))
+                    if img is not None and img.shape[:2] == (AVATAR_REF[1], AVATAR_REF[0]):
+                        self.templates[stem] = img
+        return self.templates
+
+    def match(self, crop):
+        """返回 (名字, 相似度)；没有模板或都不像时名字为 None。"""
+        best, best_score = None, -1.0
+        if crop is None:
+            return None, 0.0
+        for name, tpl in self.load().items():
+            score = float(cv2.matchTemplate(crop, tpl, cv2.TM_CCOEFF_NORMED).max())
+            if score > best_score:
+                best, best_score = name, score
+        if best_score < self.threshold:
+            return None, best_score
+        return best, best_score
+
+    def learn(self, name, crop):
+        """名字合法且还没有模板时存一张；返回是否新存。"""
+        if crop is None or not name or not _name_ok.match(name):
+            return False
+        if name in self.load():
+            return False
+        os.makedirs(self.folder, exist_ok=True)
+        if _imwrite_any(os.path.join(self.folder, f"{name}.png"), crop):
+            self.templates[name] = crop.copy()
+            return True
+        return False
+
+
+def identify_cards(frame, cards, width, height, book):
+    """给每张卡片填上 name / name_score（认不出为 None）。"""
+    for c in cards:
+        c["avatar"] = avatar_crop(frame, c["power_box"], width, height)
+        crop = avatar_crop(frame, c["power_box"], width, height, margin=AVATAR_MARGIN)
+        c["name"], c["name_score"] = book.match(crop)
+    return cards

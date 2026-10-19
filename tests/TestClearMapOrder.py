@@ -254,6 +254,32 @@ class TestSupportSelect(unittest.TestCase):
         x_all, _ = filter_point(tab, None, self.W, self.H)
         self.assertAlmostEqual(x_all, 1012, delta=4)
 
+    def test_identify_cards_from_real_panel(self):
+        import cv2
+
+        from src.core.support_select import AvatarBook, identify_cards
+
+        frame = cv2.imread(str(FIXTURE))
+        cards = [{"power_box": Box(x, y, 40, 16, name="1")} for x, y in [(1015, 190), (1108, 190), (1195, 190), (1015, 302), (1108, 302), (1195, 302)]]
+        identify_cards(frame, cards, 1280, 768, AvatarBook())
+        self.assertEqual([c["name"] for c in cards], ["威玛西娜"] * 5 + [None])
+        self.assertEqual(cards[0]["avatar"].shape, (54, 52, 3))
+
+    def test_avatar_book_learn(self):
+        import tempfile
+
+        import numpy as np
+
+        from src.core.support_select import AvatarBook
+
+        with tempfile.TemporaryDirectory() as d:
+            book = AvatarBook(d)
+            crop = np.random.randint(0, 255, (54, 52, 3), dtype=np.uint8)
+            self.assertFalse(book.learn("Lv.60", crop))
+            self.assertTrue(book.learn("春田", crop))
+            self.assertFalse(book.learn("春田", crop))
+            self.assertEqual(AvatarBook(d).match(crop)[0], "春田")
+
     def test_empty_tiles(self):
         tiles = [
             {"center": (182, 365), "bbox": (121, 331, 126, 71)},  # 头顶有 3
