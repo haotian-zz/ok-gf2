@@ -485,3 +485,36 @@ def find_unit_tags(frame, width, height, max_n=8):
 
 def unit_tiles_from_tags(tags, height):
     return [(x, y + UNIT_TAG_DY * height) for x, y, _ in tags]
+
+
+# ------------------------------------------------------------------ 换人决策
+def pick_withdraw_target(units, chosen, own_power, name_like):
+    """
+    决定为助战腾位时撤谁。
+    :param units: 地图上点到的单位 [(tile, name), ...]
+    :param chosen: 选好的助战名字
+    :param own_power: 我方已上场 {名字: 战力}（来自我的人形里打勾的卡片）
+    :param name_like: 名字模糊比较函数
+    :return: "keep"（场上已是这个助战）/ (tile, name, 原因) / None（没有可撤的）
+    优先级：上一关借的旧助战（不在我方名单里）> 和助战同名的我方人形 > 我方战力最低的
+    """
+
+    def own_of(name):
+        return [p for n, p in own_power.items() if name_like(n, name)]
+
+    supports = [(t, n) for t, n in units if not own_of(n)]
+    for _, n in supports:
+        if name_like(n, chosen):
+            return "keep"
+    if supports:
+        t, n = supports[0]
+        return t, n, "上一关借的助战"
+    same = [(t, n) for t, n in units if name_like(n, chosen)]
+    if same:
+        t, n = same[0]
+        return t, n, "与助战同名"
+    owns = [(t, n, min(own_of(n))) for t, n in units if own_of(n)]
+    if owns:
+        t, n, p = min(owns, key=lambda x: x[2])
+        return t, n, f"我方战力最低({p})"
+    return None

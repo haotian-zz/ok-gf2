@@ -29,8 +29,10 @@ from src.core.support_select import (
     merge_tiles,
     order_tiles,
     pick_candidates,
+    pick_withdraw_target,
     read_badge,
 )
+from src.core.lineup_config import KEY_FALLBACK, KEY_MIN_BADGE, KEY_PRESET, KEY_ROLE, LINEUP_OPTION_NAME
 from src.data.FeatureList import FeatureList as fL
 from src.image.frame_processs import isolate_by_hsv_ranges
 from src.image.hsv_config import HSVRange as hR
@@ -308,31 +310,68 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.debug_shot("panel_open" if ok else "panel_open_fail")
         return ok
 
+    def _lineup_cfg(self):
+        return self.get_global_config(LINEUP_OPTION_NAME)
+
+    def _preset_name(self):
+        return (self._lineup_cfg().get(KEY_PRESET) or "").strip()
+
+    def _preset_boxes(self):
+        return self._ocr_panel(PRESET_BOX, match=[re.compile(r"编队\s*\d"), re.compile(r"整备室配置"), re.compile(r".{1,12}")])
+
+    @staticmethod
+    def _preset_text_like(text, name):
+        t = (text or "").replace(" ", "")
+        return bool(name) and (name in t or t in name and len(t) >= 2)
+
     def _fix_panel_state(self):
         """
-        「我的人形」页签顶上有个「使用整备室配置」下拉框。误点它会展开「编队1…编队7」列表，
-        选中某个编队后面板只显示该编队的人形（空编队就是「暂无可选人形」，还会把场上阵容清掉）。
-        这里检查：面板里出现「编队n」就把它恢复成默认的「整备室配置」。返回是否做了修正。
+        「我的人形」页签顶上的「使用整备室配置」下拉框被误点会展开「编队1…编队7」列表。
+        列表展开着就把它收起来：有配置的编队名就选它，否则选「整备室配置」。返回是否做了修正。
         """
-        boxes = self._ocr_panel(PRESET_BOX, match=[re.compile(r"编队\s*\d"), re.compile(r"整备室配置")])
-        presets = [b for b in boxes if re.search(r"编队\s*\d", b.name)]
-        if not presets:
+        boxes = self._preset_boxes()
+        below = [b for b in boxes if b.y > self.height * PRESET_HEADER_Y]
+        entries = [b for b in below if re.search(r"编队\s*\d", b.name) or "整备室配置" in b.name]
+        if len(entries) < 2:
             return False
         self.debug_shot("preset_fix", boxes)
-        for _ in range(2):
-            entries = [b for b in boxes if "整备室配置" in b.name and b.y > self.height * PRESET_HEADER_Y]
-            if entries:
-                self.log_info(f"面板上出现编队列表 {[b.name for b in presets]}，选回「整备室配置」", notify=True)
-                self.click(entries[0], after_sleep=1)
-                self.next_frame()
-                return True
-            # 列表没展开（标题就是「编队n」）：点标题展开下拉框
-            self.log_info(f"面板当前选中了 {presets[0].name}，展开下拉框选回整备室配置", notify=True)
-            self.click(presets[0], after_sleep=1)
-            self.next_frame()
-            boxes = self._ocr_panel(PRESET_BOX, match=[re.compile(r"编队\s*\d"), re.compile(r"整备室配置")])
-        self.log_info("没能把编队下拉框恢复成整备室配置", notify=True)
+        name = self._preset_name()
+        pick = next((b for b in below if self._preset_text_like(b.name, name)), None) if name else None
+        if pick is None:
+            pick = next((b for b in below if "整备室配置" in b.name), entries[0])
+        self.log_info(f"面板上展开着编队列表，选「{pick.name}」收起", notify=True)
+        self.click(pick, after_sleep=1)
+        self.next_frame()
         return True
+
+    def apply_preset(self, name):
+        """在「我的人形」页签的「使用整备室配置」下拉框里选中名为 name 的编队。返回是否选中。"""
+        self._click_tab("我的人形")
+        boxes = self._preset_boxes()
+        header = [b for b in boxes if b.y < self.height * PRESET_HEADER_Y]
+        if any(self._preset_text_like(b.name, name) for b in header):
+            self.log_info(f"当前已是编队「{name}」", notify=False)
+            return True
+        if header:
+            self.click(header[0], after_sleep=1)
+        else:
+            self.click_relative(0.878, 0.097, after_sleep=1)
+        self.next_frame()
+        boxes = self._preset_boxes()
+        entries = [b for b in boxes if b.y > self.height * PRESET_HEADER_Y and self._preset_text_like(b.name, name)]
+        self.debug_shot("preset_list", boxes)
+        if not entries:
+            self.log_info(f"编队列表里没找到「{name}」: {[b.name for b in boxes]}，不切编队", notify=True)
+            self._fix_panel_state()
+            return False
+        self.click(entries[0], after_sleep=1.5)
+        self.next_frame()
+        boxes = self._preset_boxes()
+        header = [b for b in boxes if b.y < self.height * PRESET_HEADER_Y]
+        ok = any(self._preset_text_like(b.name, name) for b in header)
+        self.debug_shot("preset_applied", boxes)
+        self.log_info(f"已切到编队「{name}」，阵容 {self._deploy_count()}" if ok else f"点了编队「{name}」但标题没变: {[b.name for b in header]}", notify=True)
+        return ok
 
     def _lineup_full(self):
         """阵容是否已满：优先看顶部计数；读不到就看地图上还有没有空地格。"""
@@ -342,74 +381,48 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         _, empty = self._occupied_and_empty()
         return not empty
 
-    _own_deployed = ()
+    def _own_deployed_cards(self):
+        """我的人形里打了勾的卡片 {名字: 战力}（先点「全部」筛选，立绘没认出来的点一下读名字）。"""
+        tab = self._click_tab("我的人形")
+        fx, fy = filter_point(tab, "全部", self.width, self.height, my_tab=True)
+        self.click_relative(fx / self.width, fy / self.height, after_sleep=0.8)
+        self.next_frame()
+        cards = self._scan_cards()
+        deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
+        for c in deployed:
+            if c["name"] is None:
+                c["name"] = self._click_card(c) or None
+        self.debug_shot("support_my_tab", [c["power_box"] for c in deployed])
+        own = {c["name"]: c["power"] for c in deployed if c["name"]}
+        self.log_info(f"我的人形已上场 {len(deployed)} 张卡片 {own}", notify=False)
+        return own
 
-    def _withdraw_old_support(self, role):
-        """
-        场上同时只能有一个助战：上一关借的助战还在场上时，必须先撤回才能借别的。
-        逐个点地图上有人的地格，名字不在我方已上场名单里的就是助战：
-        是目标角色就保留（返回 "keep"），不是就点「撤回人形」（返回 "withdrawn"）；场上没有助战返回 None。
-        """
-        own_names = [c["name"] for c in self._own_deployed if c.get("name")]
-        for tile, desc in self._unit_tiles():
-            self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=0.8)
-            self.next_frame()
-            name = self._selected_role_name()
-            kind, button = self._deploy_button()
-            if kind != "withdraw" or not name or any(self._name_like(n, name) for n in own_names):
-                self._clear_selection()
-                continue
-            if role in name:
-                self.log_info(f"场上已有助战 {name}，保留不换", notify=True)
-                self._clear_selection()
-                return "keep"
-            self.log_info(f"场上已有上一关借的助战 {name}，先撤回再换", notify=True)
-            self.click(button, after_sleep=1)
-            self.next_frame()
-            self.debug_shot("old_support_withdrawn")
-            return "withdrawn"
-        return None
-
-    def _make_room(self):
-        """
-        阵容满时给助战腾一个位置：逐个点地图上有人的地格（点中后右下角是「撤回人形」、左下角是名字），
-        优先撤回不在我方已上场名单里的那个（上一关借的助战），否则撤回我方战力最低的。返回是否腾出了位置。
-        """
-        if not self._lineup_full():
-            return True
-        own = {c["name"]: c["power"] for c in self._own_deployed if c.get("name")}
-        found = []
+    def _map_units(self):
+        """逐个点地图上有人的地格，返回 [(tile, 名字)]（点中后右下角是「撤回人形」才算）。"""
+        units = []
         for tile, desc in self._unit_tiles():
             self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=0.8)
             self.next_frame()
             name = self._selected_role_name()
             kind, _ = self._deploy_button()
             if kind == "withdraw" and name:
-                found.append((tile, name))
+                units.append((tile, name))
             self._clear_selection()
-        if not found:
-            self.debug_shot("make_room_fail")
-            self.log_info("阵容已满，但在地图上没点中任何可撤回的单位，助战只能试着顶替", notify=True)
-            return False
+        self.log_info(f"地图上的单位 {[n for _, n in units]}", notify=False)
+        return units
 
-        def order(item):
-            powers = [p for n, p in own.items() if self._name_like(n, item[1])]
-            return (1, min(powers)) if powers else (0, 0)
-
-        found.sort(key=order)
-        tile, name = found[0]
+    def _withdraw_unit(self, tile, name, why):
         self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=0.8)
         self.next_frame()
         kind, button = self._deploy_button()
-        if kind != "withdraw":
+        if kind != "withdraw" or name not in self._selected_role_name():
             self._clear_selection()
-            self.log_info(f"阵容已满，重新点中 {name} 失败，助战只能试着顶替", notify=True)
+            self.log_info(f"重新点中 {name} 失败，没撤回", notify=True)
             return False
-        why = "上一关借的助战" if order((tile, name))[0] == 0 else "我方战力最低"
-        self.log_info(f"阵容已满，撤回{why}的 {name} 给助战腾位", notify=True)
+        self.log_info(f"撤回{why}的 {name}", notify=True)
         self.click(button, after_sleep=1)
         self.next_frame()
-        self.debug_shot("room_made")
+        self.debug_shot("withdrawn")
         return True
 
     def _deploy_count(self):
@@ -593,110 +606,114 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.log_info(f"{label} 点了部署但没确认上场", notify=False)
         return False
 
+    LINEUP_TASK = False  # 会进部署界面并需要整理阵容的任务置 True（推图）
+
+    def prepare_lineup(self):
+        """
+        开战前整理阵容：切到配置的整备室编队 → （开了借助战）选助战、撤一人、上助战 → 补满空位。
+        """
+        if not self.ocr(match="作战开始", box=self.box.bottom):
+            self.log_info("不在部署界面，跳过整理阵容", notify=False)
+            return
+        if not self._ensure_panel():
+            self.log_info("打不开部署面板，跳过整理阵容", notify=True)
+            return
+        self._borrowed_support = None
+        preset = self._preset_name()
+        if preset:
+            self.info_set("current_task", "切换编队")
+            self.apply_preset(preset)
+        if self.config.get("借好友助战", False):
+            self.borrow_support()
+        self.fill_lineup()
+        self.next_frame()
+        self.debug_shot("lineup_ready")
+
     def borrow_support(self):
         """
-        在部署界面借好友助战：目标角色由「助战角色」「助战最低椎数」决定。
-        1. 我的人形里若已上场同名角色，先选中并「撤回人形」；
-        2. 好友助战按属性筛选，按战力从高到低找椎数达标的卡片，点中后核对左下角名字，再「部署人形」；
-        3. 没有达标的就不借，直接返回 False。
+        借好友助战：先选好要借谁（椎数达标的指定角色，否则战力最高），再看地图上要撤谁
+        （旧助战 > 与助战同名的我方人形 > 我方战力最低，没满且不冲突就不撤），最后把助战部署到空地格。
         """
-        role = self.config.get("助战角色", "威玛西娜").strip()
-        min_badge = int(self.config.get("助战最低椎数", 6))
+        cfg = self._lineup_cfg()
+        role = (cfg.get(KEY_ROLE) or "").strip()
+        min_badge = int(cfg.get(KEY_MIN_BADGE) or 0)
+        fallback = bool(cfg.get(KEY_FALLBACK))
         self.info_set("current_task", "borrow_support")
-        self._borrowed_support = None
-        self.next_frame()
-        if not self.ocr(match="作战开始", box=self.box.bottom):
-            self.log_info("不在部署界面，跳过借助战", notify=False)
-            return False
-        if not self._ensure_panel():
-            self.log_info("打不开部署面板，跳过借助战", notify=True)
-            return False
         try:
-            self._withdraw_own(role)
-            if self._withdraw_old_support(role) == "keep":
+            chosen = self._choose_support(role, min_badge, fallback)
+            if not chosen:
+                self.log_info("没有可借的助战，直接开战", notify=True)
+                return False
+            own = self._own_deployed_cards()
+            units = self._map_units()
+            target = pick_withdraw_target(units, chosen["name"], own, self._name_like)
+            if target == "keep":
+                self.log_info(f"场上已有助战 {chosen['name']}，保留不换", notify=True)
+                self._borrowed_support = chosen["name"]
                 return True
-            return self._pick_friend_support(role, min_badge)
+            full = self._lineup_full()
+            if target and (full or "战力最低" not in target[2]):
+                self._withdraw_unit(*target)
+            elif full:
+                self.log_info("阵容已满但地图上没点中可撤回的单位，助战只能试着顶替", notify=True)
+            chosen["reselect"]()
+            self.next_frame()
+            return self._deploy_selected_support(chosen["label"], chosen["name"], chosen["reselect"])
         finally:
             self.next_frame()
             self.debug_shot("support_done")
 
-    def _withdraw_own(self, role):
-        self._click_tab("我的人形")
-        self.sleep(0.5)
-        self.next_frame()
-        cards = self._scan_cards()
-        deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
-        self.debug_shot("support_my_tab", [c["power_box"] for c in deployed])
-        for c in deployed:
-            if c["name"] is None:
-                # 立绘没认出来的，点一下读名字（顺便学会），保证我方已上场名单完整，后面才能分辨谁是助战
-                c["name"] = self._click_card(c) or None
-        self.log_info(f"我的人形已上场 {len(deployed)} 张卡片 {[(c['name'], c['power']) for c in deployed]}", notify=False)
-        self._own_deployed = tuple(deployed)
-        if not any(c["name"] is None or self._name_like(c["name"], role) for c in deployed):
-            return False
-        for c in deployed:
-            if c["name"] and not self._name_like(c["name"], role):
-                continue
-            name = self._click_card(c)
-            if role not in name:
-                continue
-            kind, button = self._deploy_button()
-            if kind != "withdraw":
-                # 点卡片只是选中卡片，撤回要先在地图上点中这个单位
-                if not self._select_unit_on_map(role):
-                    self.log_info(f"我方已上场 {role}，但在地图上没点中它，无法撤回", notify=True)
-                    return False
-                kind, button = self._deploy_button()
-            if kind == "withdraw":
-                self.log_info(f"我方已上场 {role}，先撤回再借助战", notify=True)
-                self.click(button, after_sleep=1)
-                self.next_frame()
-                self.debug_shot("support_withdrawn")
-                return True
-            return False
-        return False
-
-    def _pick_friend_support(self, role, min_badge):
+    def _choose_support(self, role, min_badge, fallback):
+        """在好友助战里选一张卡：椎数达标的 role（按战力），否则（开了兜底）「全部」里战力最高的。返回 dict 或 None。"""
         tab = self._click_tab("好友助战")
-        attr = self.get_role_by_name(role)
-        fx, fy = filter_point(tab, attr, self.width, self.height)
+        if role:
+            attr = self.get_role_by_name(role)
+            fx, fy = filter_point(tab, attr, self.width, self.height)
+            self.click_relative(fx / self.width, fy / self.height, after_sleep=1)
+            self.next_frame()
+            cards = self._scan_cards()
+            self.debug_shot("support_scan", [c["power_box"] for c in cards])
+            candidates = pick_candidates(cards, min_badge)
+            candidates = [c for c in candidates if c["name"] is None or self._name_like(c["name"], role)]
+            candidates.sort(key=lambda c: (c["name"] != role, c["name"] is None, -c["power"]))
+            self.log_info(
+                f"好友助战({attr or '全部'}) 识别 {len(cards)} 张 {[(c['name'], c['badge'], c['power']) for c in cards]}，"
+                f"椎数>={min_badge} 且可能是 {role} 的 {len(candidates)} 张",
+                notify=False,
+            )
+            for c in candidates:
+                name = self._click_card(c)
+                if role in name:
+                    return self._chosen(c, name, f"{c['badge']}椎 {name}（战力 {c['power']}）", (fx, fy))
+                self.log_info(f"{c['badge']}椎 战力{c['power']} 是 {name}，不是 {role}，跳过", notify=False)
+            self.log_info(f"没有 {min_badge} 椎及以上的 {role} 助战", notify=True)
+        if not fallback:
+            return None
+        self._click_tab("好友助战")
+        fx, fy = filter_point(tab, "全部", self.width, self.height)
         self.click_relative(fx / self.width, fy / self.height, after_sleep=1)
         self.next_frame()
         cards = self._scan_cards()
-        self.debug_shot("support_scan", [c["power_box"] for c in cards])
-        if not cards and self.ocr(match=self.fix_match_regex(["暂无可选择人形"])):
-            self.log_info("好友助战列表为空（暂无可选择人形），通常是我方已上场同名角色没撤回", notify=True)
-        candidates = pick_candidates(cards, min_badge)
-        # 立绘认出来是别人的直接跳过；认出来就是目标的优先，认不出的再点一下确认
-        candidates = [c for c in candidates if c["name"] is None or self._name_like(c["name"], role)]
-        candidates.sort(key=lambda c: (c["name"] != role, c["name"] is None, -c["power"]))
-        self.log_info(
-            f"好友助战({attr or '全部'}) 识别 {len(cards)} 张 {[(c['name'], c['badge'], c['power']) for c in cards]}，"
-            f"椎数>={min_badge} 且可能是 {role} 的 {len(candidates)} 张",
-            notify=False,
-        )
-        room_checked = False
-        for c in candidates:
-            x, y = c["center"]
+        self.debug_shot("support_scan_all", [c["power_box"] for c in cards])
+        self.log_info(f"兜底借战力最高：全部列表 {[(c['name'], c['badge'], c['power']) for c in cards]}", notify=False)
+        for c in cards[:3]:
             name = self._click_card(c)
-            if role not in name:
-                self.log_info(f"{c['badge']}椎 战力{c['power']} 是 {name}，不是 {role}，跳过", notify=False)
-                continue
-            if not room_checked:
-                room_checked = True
-                self._make_room()
-                self._reselect_card("好友助战", x, y)()
-                self.next_frame()
-            if self._deploy_selected_support(
-                f"{c['badge']}椎 {role}（战力 {c['power']}）", role, self._reselect_card("好友助战", x, y)
-            ):
-                return True
-        self.log_info(f"没有 {min_badge} 椎及以上的 {role} 助战", notify=True)
-        if self.config.get("找不到就借战力最高", False):
-            return self._pick_strongest_support(tab)
-        self.log_info("不借，直接开战", notify=True)
-        return False
+            if name:
+                return self._chosen(c, name, f"战力最高 {name}（{c['badge']}椎 战力 {c['power']}）", (fx, fy))
+            self.log_info(f"战力 {c['power']} 的卡片点了没读到名字，跳过", notify=False)
+        return None
+
+    def _chosen(self, card, name, label, filter_xy):
+        x, y = card["center"]
+        fx, fy = filter_xy
+
+        def reselect():
+            self._click_tab("好友助战")
+            self.click_relative(fx / self.width, fy / self.height, after_sleep=0.8)
+            self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
+
+        self.log_info(f"选定助战 {label}", notify=True)
+        return {"card": card, "name": name, "label": label, "reselect": reselect}
 
     _borrowed_support = None
 
@@ -715,45 +732,10 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
         return _do
 
-    def _pick_strongest_support(self, tab):
-        """兜底：切到「全部」筛选，按战力从高到低借第一个能部署的助战。"""
-        # 前面试点地格可能点中了己方单位，面板会跳回「我的人形」——那一页同样位置是「使用整备室配置」，
-        # 点下去会展开编队列表甚至清空阵容，所以先确保在好友助战页签
-        tab = self._click_tab("好友助战")
-        fx, fy = filter_point(tab, "全部", self.width, self.height)
-        self.click_relative(fx / self.width, fy / self.height, after_sleep=1)
-        self.next_frame()
-        cards = self._scan_cards()
-        self.debug_shot("support_scan_all", [c["power_box"] for c in cards])
-        self.log_info(f"兜底借战力最高：全部列表 {[(c['name'], c['badge'], c['power']) for c in cards]}", notify=False)
-        deployed = [c for c in cards if is_orange_check(self.frame, *check_point(c, self.width, self.height))]
-        if deployed:
-            # 列表里有打了勾的卡片 = 上一关借的助战还在场上，不用再借
-            self.log_info(f"已有助战在场上 {[(c['name'], c['power']) for c in deployed]}，不再换", notify=True)
-            return True
-        room_checked = False
-        for c in cards[:3]:
-            x, y = c["center"]
-            name = self._click_card(c)
-            if not name:
-                self.log_info(f"战力 {c['power']} 的卡片点了没读到名字，跳过", notify=False)
-                continue
-            if not room_checked:
-                room_checked = True
-                self._make_room()
-                self._reselect_card("好友助战", x, y)()
-                self.next_frame()
-            if self._deploy_selected_support(
-                f"战力最高 {name}（{c['badge']}椎 战力 {c['power']}）", name, self._reselect_card("好友助战", x, y)
-            ):
-                return True
-        self.log_info("兜底也没借到助战，直接开战", notify=True)
-        return False
-
     def fill_lineup(self, max_rounds=4):
         """
-        把阵容补满：顶部「部署人形 n/m」不满时，到我的人形里按战力从高到低挑没上场的卡片，
-        选中卡片 → 点一个空地格 → 点「部署人形」，直到 n == m 或没有可用的卡片/地格。
+        把阵容补满：顶部「部署人形 n/m」不满时，到我的人形里按战力从高到低挑没上场的卡片
+        （选了编队就只剩编队成员），选中卡片 → 点一个空地格 → 点「部署人形」，直到 n == m 或没有可用的卡片/地格。
         """
         self.info_set("current_task", "fill_lineup")
         self.next_frame()
@@ -764,9 +746,6 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if count[0] >= count[1]:
             return True
         self.log_info(f"阵容 {count[0]}/{count[1]}，开始补满", notify=True)
-        if not self._ensure_panel():
-            self.log_info("打不开部署面板，跳过补满阵容", notify=True)
-            return False
         tab = self._click_tab("我的人形")
         # 属性筛选和好友助战页签是共用的，借完助战后这里可能还停在某个属性上，先点「全部」
         fx, fy = filter_point(tab, "全部", self.width, self.height, my_tab=True)
@@ -925,11 +904,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             return
         if result[0].name == "作战开始":
             self.sleep(2)
-            if self.config.get("借好友助战", False):
-                self.borrow_support()
-            if self.config.get("自动补满阵容", False):
-                self.fill_lineup()
-            if self.config.get("借好友助战", False) or self.config.get("自动补满阵容", False):
+            if self.LINEUP_TASK or self.config.get("借好友助战", False):
+                self.prepare_lineup()
                 if self._deploy_button()[0] in ("withdraw", "blocked"):
                     self._clear_selection()
                 result = self.wait_ocr(match="作战开始", box=self.box.bottom, time_out=10, raise_if_not_found=True)

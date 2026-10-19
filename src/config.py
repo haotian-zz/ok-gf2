@@ -1,5 +1,7 @@
 import os
 
+from src.core.lineup_config import lineup_option
+
 version = "dev"
 # 不需要修改version, Github Action打包会自动修改
 
@@ -74,6 +76,7 @@ config = {
     "trigger_tasks": [  # 循环触发的任务
         ["src.tasks.TemplateMonitorTask", "TemplateMonitorTask"],
     ],
+    "global_configs": [lineup_option],  # 全局配置：设置页里的「阵容与助战」
     "custom_tabs": [  # 自定义界面页
         ["src.gui.AccountConfigTab", "AccountConfigTab"],
         ["src.gui.ImportantNoticesTab", "ImportantNoticesTab"],
