@@ -203,6 +203,7 @@ class ClearMapTask(BaseGfTask):
         self.processors = processors
 
         self.log_info("推图开始", notify=False)
+        self._lineup_verified = False  # 每次启动任务只在第一场整理阵容，之后沿用
 
         ordered = self.scan_maps()
         if not ordered:

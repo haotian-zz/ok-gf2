@@ -688,6 +688,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return False
 
     LINEUP_TASK = False  # 会进部署界面并需要整理阵容的任务置 True（推图）
+    _lineup_verified = False  # 本次任务已经整理过一次阵容；任务 run 开头置回 False
 
     def prepare_lineup(self):
         """
@@ -1005,11 +1006,20 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             return
         if result[0].name == "作战开始":
             self.sleep(2)
-            if keep_lineup:
-                self.log_info("继续前进进来的下一段，沿用上一段阵容直接开战", notify=False)
-            elif self.LINEUP_TASK or self.config.get("借好友助战", False):
+            lineup_on = self.LINEUP_TASK or self.config.get("借好友助战", False)
+            if lineup_on and (keep_lineup or self._lineup_verified):
+                # 任务启动后只在第一次进部署界面时整理阵容；之后不管是「继续前进」还是从选关面板「挑战」进来，
+                # 游戏都沿用上一场的阵容（含助战），只看一眼人数没缺就直接开战
+                count = self._deploy_count()
+                if count and count[0] < count[1]:
+                    self.log_info(f"阵容只有 {count[0]}/{count[1]}，重新整理一次", notify=True)
+                    self.prepare_lineup()
+                else:
+                    self.log_info("阵容已整理过，沿用上一场直接开战", notify=False)
+            elif lineup_on:
                 self.prepare_lineup()
-            if keep_lineup or self.LINEUP_TASK or self.config.get("借好友助战", False):
+                self._lineup_verified = True
+            if lineup_on:
                 if self._deploy_button()[0] in ("withdraw", "blocked"):
                     self._clear_selection()
                 result = self.wait_ocr(match="作战开始", box=self.box.bottom, time_out=10, raise_if_not_found=True)
