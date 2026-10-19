@@ -102,6 +102,38 @@ class TestProgressStore(unittest.TestCase):
             self.assertTrue(store.mark("x", "1-1"))
 
 
+class TestLoadingFrame(unittest.TestCase):
+    """_is_loading_frame 只依赖 OCR 结果，直接用未绑定方法测。"""
+
+    def setUp(self):
+        from src.core.BaseGfTask import BaseGfTask
+
+        self.is_loading = BaseGfTask._is_loading_frame
+
+    def boxes(self, *names):
+        return [Box(0, 0, 1, 1, name=n) for n in names]
+
+    def test_loading_screens(self):
+        self.assertTrue(self.is_loading(None, []))
+        self.assertTrue(
+            self.is_loading(None, self.boxes("18%", "资源加载中", "//.008625", "罗联污染区勘测维护及环境分析情报组"))
+        )
+        self.assertTrue(self.is_loading(None, self.boxes("42%")))
+
+    def test_tutorial_popup_is_not_loading(self):
+        self.assertFalse(
+            self.is_loading(
+                None,
+                self.boxes(
+                    "60%", "25%", "60%", "20%", "显示此次伤害的具体信息，包括稳态减伤、掩体减伤、降防率以及暴击率。"
+                ),
+            )
+        )
+
+    def test_battle_ui_is_not_loading(self):
+        self.assertFalse(self.is_loading(None, self.boxes("01/12 回合", "击杀所有敌方单位 5/8", "行动结束", "115%")))
+
+
 class TestDebugShot(unittest.TestCase):
     def test_save_and_rotate(self):
         frame = np.zeros((72, 128, 3), dtype=np.uint8)

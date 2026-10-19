@@ -123,7 +123,13 @@ class BaseGfTask(RuntimeMixin, BaseTask):
     def skip_dialogs(self, end_match, end_box=None, time_out=120, has_dialog=True, raise_if_not_found=True):
         self.info_set("current_task", "skip_dialogs")
         start = time.time()
+        attempts = 0
+        next_debug_shot = 30
         while time.time() - start < time_out:
+            if time.time() - start > next_debug_shot:
+                # 长时间没匹配到结束条件，留一张图方便排查卡在什么页面
+                self.debug_shot("skip_dialogs_waiting")
+                next_debug_shot += 30
             try:
                 boxes = self.ocr()
             except AttributeError:
@@ -151,7 +157,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             else:
                 # 战斗中界面右上角是加速/跳过回合图标，不是剧情跳过，不能点
                 if has_dialog and not self._is_loading_frame(boxes) and not self._is_battle_frame(boxes):
-                    self.click_relative(0.95, 0.04)
+                    # 剧情跳过标签在 (0.95, 0.04)，教学弹窗的关闭 X 在 (0.967, 0.042)，交替点两处
+                    if attempts % 2 == 0:
+                        self.click_relative(0.95, 0.04)
+                    else:
+                        self.click_relative(0.967, 0.042)
+                    attempts += 1
                 self.sleep(2)
             self.next_frame()
         self.debug_shot("skip_dialogs_timeout")
@@ -174,15 +185,13 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         """
         if not boxes:
             return True
-        for box in boxes:
-            name = box.name
-            if not name:
-                continue
-            if "资源加载中" in name:
-                return True
-            if re.search(r"\d{1,3}%", name):
-                return True
-        return False
+        names = [box.name for box in boxes if box.name]
+        if any("资源加载中" in name for name in names):
+            return True
+        # 只有一个进度百分比、几乎没有别的文字时才算加载页；
+        # 教学弹窗里的「60% 25% 60% 20%」这类伤害数值不能当成加载页，否则会一直不点关闭
+        has_progress = any(re.fullmatch(r"\s*\d{1,3}%\s*", name) for name in names)
+        return has_progress and len(names) <= 3
 
     def auto_battle(
         self, end_match=None, end_box=None, has_dialog=False, need_click_auto=False, has_dialog_behind_start=False
