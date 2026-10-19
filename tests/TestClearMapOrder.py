@@ -259,7 +259,7 @@ class TestSupportSelect(unittest.TestCase):
 
         from src.core.support_select import AvatarBook, identify_cards
 
-        frame = cv2.imread(str(FIXTURE))
+        frame = cv2.imread(str(self.FIXTURE))
         cards = [{"power_box": Box(x, y, 40, 16, name="1")} for x, y in [(1015, 190), (1108, 190), (1195, 190), (1015, 302), (1108, 302), (1195, 302)]]
         identify_cards(frame, cards, 1280, 768, AvatarBook())
         self.assertEqual([c["name"] for c in cards], ["威玛西娜"] * 5 + [None])
