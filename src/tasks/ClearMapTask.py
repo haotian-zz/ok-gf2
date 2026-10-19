@@ -3,36 +3,34 @@ import re
 from ok import Logger
 
 from src.core.BaseGfTask import BaseGfTask, map_re
-from src.data.FeatureList import FeatureList as fL
 from src.image.hsv_config import HSVRange as hR
+from src.tasks.clear_map_progress import ProgressStore
 
 logger = Logger.get_logger(__name__)
 
+chapter_re = re.compile(r"\d+\.\d+\S*")
+
+
+def canonical_name(name_group):
+    """一组 OCR 名字里取一个稳定的关卡名：优先不带 * 的、最短的。"""
+    names = sorted((n for n in name_group if isinstance(n, str)), key=lambda n: (n.endswith("*"), len(n), n))
+    return names[0] if names else None
+
 
 def order_maps(maps, name_groups):
-    """
-    把关卡和对应的名字组配对后排序：带未通关标记 / 当前位置标记的关卡最先，其余按 x 从左到右。
-    返回 [(map, name_group), ...]
-    """
-
-    def rank(item):
-        current_map, group = item
-        marked = fL.not_clear_one in group or fL.now_icon in group
-        return (0 if marked else 1, current_map.x)
-
-    return sorted(zip(maps, name_groups, strict=True), key=rank)
+    """把关卡和对应的名字组配对后按 x 从左到右排序，返回 [(map, name_group), ...]。"""
+    return sorted(zip(maps, name_groups, strict=True), key=lambda item: item[0].x)
 
 
-def pick_candidate(ordered, done, locked, cursor=None):
+def pick_candidate(ordered, skip, cursor=None):
     """
     从排序后的 (map, name_group) 列表里挑下一个要点的关卡。
 
-    - 跳过已处理(done)和本轮判定未解锁(locked)的关卡
-    - cursor 是进度游标：最近一次确认已通关或刚打完的关卡名。能走到这一关说明它左边的
-      都已通关，所以只在它右边找，取最靠左的那个。游标不在屏幕上时退回最左边的可用关卡
+    - skip 里的名字（本地记录已通关 / 本次已处理 / 本轮未解锁）跳过
+    - cursor 是进度游标：最近一次处理过的关卡名；只在它右边找。游标不在屏幕上时退回最左边
     - 返回 None 表示屏幕上没有可点的关卡
     """
-    usable = [(m, g) for m, g in ordered if not (g & done) and not (g & locked)]
+    usable = [(m, g) for m, g in ordered if not (g & skip)]
     if cursor:
         cursor_box = next((m for m, g in ordered if cursor in g), None)
         if cursor_box is not None:
@@ -44,12 +42,14 @@ class ClearMapTask(BaseGfTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.name = "推图"
-        self.description = "从要推的图的最左边开始"
+        self.description = "停在任意关卡页面启动即可，会先回到章节起点再从左到右推完所有未通关的关卡"
         self.default_config.update(
             {
                 "普通OCR": True,
                 "除杂色OCR1": True,
                 "除杂色OCR2": True,
+                "难度": "普通",
+                "使用本地通关记录": True,
                 "战斗内点击自动": False,
                 "调试截图": True,
             }
@@ -68,6 +68,11 @@ class ClearMapTask(BaseGfTask):
                     "除杂色OCR2（宽松白灰色）：同时保留白色与浅灰色区域后再识别\n"
                     "适用场景：关卡卡片文字为白色或浅灰色，或普通OCR/除杂色OCR1均无法识别时"
                 ),
+                "难度": "当前推的难度（普通/困难），只用来区分本地通关记录，不会去切换游戏内的难度",
+                "使用本地通关记录": (
+                    "核实过已通关的关卡写入 configs/clear_map_progress.json，下次直接跳过不再点开\n"
+                    "记录不对时删掉该文件或关闭此项重新核实"
+                ),
                 "战斗内点击自动": (
                     "进入战斗后若检测到「行动结束」，自动点击右上角的自动战斗按钮\n"
                     "默认关闭，依赖游戏内全局自动（设置→其他→自动战斗设置）；未开全局自动时再打开"
@@ -78,15 +83,77 @@ class ClearMapTask(BaseGfTask):
                 ),
             }
         )
+        self.progress = None
+        self.progress_key = "unknown"
+        self.processors = []
 
+    # ------------------------------------------------------------------ 扫描
+    def scan_maps(self):
+        """识别当前屏幕上的关卡卡片，返回按 x 排序的 [(box, name_group), ...]。"""
+        self.next_frame()
+        maps = []
+        for p in self.processors:
+            maps.extend(self.ocr(match=map_re, log=True, frame_processor=p))
+        maps, groups = merge_maps(maps, x_threshold=40 / 1920 * self.width, y_threshold=40 / 1080 * self.height)
+        ordered = order_maps(maps, groups)
+        self.log_debug(f"maps: {[m for m, _ in ordered]}")
+        self.debug_shot("scan", [m for m, _ in ordered])
+        return ordered
+
+    def read_chapter_key(self):
+        """用顶部章节标题 + 难度做本地记录的键，例如 3.0缺位拟合|普通。"""
+        title = self.ocr(box=self.box.top, match=chapter_re, log=True)
+        chapter = title[0].name.lstrip("/ ") if title else "unknown"
+        return f"{chapter}|{self.config.get('难度', '普通')}"
+
+    # ------------------------------------------------------------------ 面板
+    def inspect_card(self, card, name):
+        """
+        点开卡片读右侧面板，返回 (状态, 动作按钮)。
+        状态：cleared / locked / challenge / watch / nopanel
+        """
+        self.click(card, after_sleep=1)
+        boxes = (
+            self.wait_ocr(box="right", match=["特殊奖励", "观看", "挑战", "完成前置关卡解锁"], time_out=3, log=True)
+            or []
+        )
+        # wait_ocr 的 match 会经过 OCR 纠错表展开（現看/観看 → 观看），
+        # 但 find_boxes 是精确比较，这里要用同样展开过的匹配列表
+        locked_hint = self.find_boxes(boxes, match=self.fix_match_regex(["完成前置关卡解锁"]))
+        special_reward = self.find_boxes(boxes, match=self.fix_match_regex(["特殊奖励"]))
+        challenge = self.find_boxes(boxes, match=self.fix_match_regex(["挑战"]))
+        watch = self.find_boxes(boxes, match=self.fix_match_regex(["观看"]))
+        self.debug_shot(f"panel_{name}", boxes)
+        if not boxes:
+            return "nopanel", None
+        if locked_hint:
+            return "locked", None
+        if not special_reward:
+            # 没有首通特殊奖励 = 已通关
+            return "cleared", None
+        if challenge:
+            return "challenge", challenge
+        if watch:
+            return "watch", watch
+        return "locked", None
+
+    def close_map_panel(self):
+        """关卡面板打开时才按返回；选关页面没有面板时按返回会直接退出到章节页面。"""
+        self.sleep(0.5)
+        if self.ocr(box="right", match=[re.compile("推荐等级"), "挑战目标", "特殊奖励", "敌方单位"]):
+            self.back(after_sleep=1.5)
+
+    def record_cleared(self, name):
+        if self.progress is not None and name and self.progress.mark(self.progress_key, name):
+            self.log_info(f"记录 {name} 已通关", notify=False)
+
+    def known_cleared(self):
+        if self.progress is None:
+            return set()
+        return self.progress.cleared(self.progress_key)
+
+    # ------------------------------------------------------------------ 主流程
     def run(self):
-        count = 0
-        done = set()  # 已通关 / 已看过剧情 / 确认无需再点的关卡名
-        locked = set()  # 本轮判定为未解锁的关卡名，完成任意关卡后清空重判
-        map_ocr_box = self.box_of_screen(x=0, y=100 / 1080, to_x=1.0, to_y=980 / 1080)
-
-        # 根据用户配置动态组合要使用的帧处理器，保持顺序：普通OCR → 除杂色OCR1 → 除杂色OCR2
-        # 至少保留一个，若全部关闭则回退到全部开启
         processors = []
         if self.config.get("普通OCR", True):
             processors.append(None)  # None 表示不做预处理，直接识别
@@ -96,97 +163,100 @@ class ClearMapTask(BaseGfTask):
             processors.append(self.make_hsv_isolator(hR.WHITE_GRAY))  # 宽松白灰色过滤
         if not processors:
             processors = [None, self.make_hsv_isolator(hR.WHITE), self.make_hsv_isolator(hR.WHITE_GRAY)]
+        self.processors = processors
 
-        cursor = None  # 进度游标：最近一次确认已通关或刚打完的关卡名，只往它右边推
+        self.progress = ProgressStore() if self.config.get("使用本地通关记录", True) else None
+        self.progress_key = self.read_chapter_key()
+        self.log_info(f"推图开始, 记录键: {self.progress_key}, 已记录通关 {len(self.known_cleared())} 关", notify=False)
+
+        ordered = self.scan_maps()
+        if not ordered:
+            raise Exception("未找到要推的图! 请停在关卡选择页面再启动")
+
+        self.go_to_chapter_start()
+        count = self.sweep_right()
+        self.log_info(f"推图完成, 本次推进 {count} 关, 记录已通关 {len(self.known_cleared())} 关", notify=True)
+
+    def go_to_chapter_start(self):
+        """
+        点屏幕最左边的卡片把视野往左挪，直到最左的卡片不再变化（到达章节起点）。
+        地图拖动对 PostMessage 无效，但点任意卡片后游戏会把它滚到屏幕左中位置。
+        顺便把路过的卡片状态记下来。
+        """
+        self.info_set("current_task", "回到章节起点")
+        prev = None
+        for _ in range(30):
+            ordered = self.scan_maps()
+            if not ordered:
+                return
+            leftmost, group = ordered[0]
+            name = canonical_name(group)
+            if name == prev or leftmost.x >= self.width * 0.45:
+                return
+            prev = name
+            if name in self.known_cleared():
+                self.click(leftmost, after_sleep=1.5)
+            else:
+                status, _ = self.inspect_card(leftmost, name)
+                if status == "cleared":
+                    self.record_cleared(name)
+            self.close_map_panel()
+
+    def sweep_right(self):
+        """从当前视野开始一路往右，核实并推进每一关，直到右边没有可处理的关卡。返回本次推进的关数。"""
+        self.info_set("current_task", "从左到右推图")
+        count = 0
+        session_done = set()  # 本次已处理过的关卡名
+        locked = set()  # 本轮判定未解锁，推完任意一关后清空重判
+        cursor = None  # 进度游标：最近一次处理过的关卡名，只往它右边推
+        last_scroll = None  # 上次为了往右看而点击的最右卡片名
 
         while True:
             self.sleep(1)
-            self.next_frame()
-            maps = []
-            for p in processors:
-                maps.extend(self.ocr(match=map_re, log=True, frame_processor=p))
-            maps.extend(self.find_feature(feature_name=fL.not_clear_one, box=map_ocr_box))
-            now_icon_y_offset = 0.489 - 0.380
-            # 当前帧直接匹配即可，不需要 wait_feature 的 1s 超时等待
-            now_icon = self.find_feature(feature_name=fL.now_icon, box=map_ocr_box) or []
-            for icon in now_icon:
-                icon.y = int(icon.y + now_icon_y_offset * self.height)
-            maps.extend(now_icon)
-            maps, map_name_groups = merge_maps(
-                maps, x_threshold=40 / 1920 * self.width, y_threshold=40 / 1080 * self.height
-            )
-
-            # 关卡与名字组必须一起排序，否则 done/locked 记录会对应到错误的关卡
-            ordered = order_maps(maps, map_name_groups)
-            self.log_debug(f"maps: {[m for m, _ in ordered]}")
-            self.debug_shot("scan", [m for m, _ in ordered])
-
+            ordered = self.scan_maps()
             if not ordered:
-                if count == 0:
-                    raise Exception("未找到要推的图! 请停在关卡选择页面再启动")
-                self.log_info(f"推图完成, 共{count}个!", notify=True)
-                return
+                raise Exception("选关页面上没有识别到关卡, 请检查游戏画面")
 
-            # 游标左边的关卡一律视为已通关，不再回头点
-            cursor_box = next((m for m, g in ordered if cursor in g), None) if cursor else None
-            if cursor_box is not None:
-                for m, g in ordered:
-                    if m.x < cursor_box.x:
-                        done.update(g)
-
-            candidate = pick_candidate(ordered, done, locked, cursor)
+            skip = self.known_cleared() | session_done | locked
+            candidate = pick_candidate(ordered, skip, cursor)
             if candidate is None:
+                # 屏幕右边没有可处理的了：点最右边的卡片把视野往右挪，看看还有没有更多关卡
+                rightmost, group = ordered[-1]
+                name = canonical_name(group)
+                if name != last_scroll and rightmost.x > self.width * 0.55:
+                    last_scroll = name
+                    self.log_info(f"向右查看更多关卡 (点击 {name})", notify=False)
+                    self.click(rightmost, after_sleep=1.5)
+                    self.close_map_panel()
+                    continue
                 if locked:
                     raise Exception(f"剩余关卡都未解锁({sorted(locked)}), 请检查前置关卡后再启动")
-                self.log_info(f"推图完成, 共{count}个!", notify=True)
-                return
-            current_map, name_group = candidate
-            self.click(current_map, after_sleep=1)
+                return count
 
-            boxes = (
-                self.wait_ocr(box="right", match=["特殊奖励", "观看", "挑战", "完成前置关卡解锁"], time_out=3, log=True)
-                or []
-            )
-            # wait_ocr 的 match 会经过 OCR 纠错表展开（現看/観看 → 观看），
-            # 但 find_boxes 是精确比较，这里要用同样展开过的匹配列表
-            locked_hint = self.find_boxes(boxes, match=self.fix_match_regex(["完成前置关卡解锁"]))
-            special_reward = self.find_boxes(boxes, match=self.fix_match_regex(["特殊奖励"]))
-            challenge = self.find_boxes(boxes, match=self.fix_match_regex(["挑战"]))
-            watch = self.find_boxes(boxes, match=self.fix_match_regex(["观看"]))
-            self.debug_shot(f"panel_{current_map.name}", boxes)
-            if not boxes:
-                # 面板没弹出或没识别到，跳过这张避免反复点
-                self.log_info(f"{current_map.name} 未识别到关卡面板, 跳过", notify=False)
-                done.update(name_group)
+            card, group = candidate
+            name = canonical_name(group) or "unknown"
+            status, action = self.inspect_card(card, name)
+            if status == "nopanel":
+                self.log_info(f"{name} 未识别到关卡面板, 跳过", notify=False)
+                session_done.update(group)
+                self.close_map_panel()
+                continue
+            if status == "locked":
+                self.log_info(f"{name} 未解锁, 先推其他关卡", notify=False)
+                locked.update(group)
+                self.close_map_panel()
+                continue
+            if status == "cleared":
+                self.log_info(f"{name} 已通关, 跳过", notify=False)
+                session_done.update(group)
+                self.record_cleared(name)
+                cursor = name
                 self.close_map_panel()
                 continue
 
-            if locked_hint:
-                # 前置关卡在它左边且还没推，先跳过，推完别的关卡后重新判定
-                self.log_info(f"{current_map.name} 未解锁, 先推它左边的关卡", notify=False)
-                locked.update(name_group)
-                self.close_map_panel()
-                continue
-
-            if not special_reward:
-                # 没有首通特殊奖励 = 已通关，游标推进到这里
-                self.log_info(f"{current_map.name} 已通关, 跳过", notify=False)
-                done.update(name_group)
-                cursor = current_map.name
-                self.close_map_panel()
-                continue
-
-            action = challenge or watch
-            if not action:
-                self.log_info(f"{current_map.name} 面板没有挑战/观看按钮, 视为未解锁", notify=False)
-                locked.update(name_group)
-                self.close_map_panel()
-                continue
-
-            # 正常处理挑战或观看
+            # challenge / watch
             self.click(action, after_sleep=2)
-            count += 1
-            if challenge:
+            if status == "challenge":
                 self.auto_battle(
                     end_match=map_re,
                     has_dialog=True,
@@ -194,19 +264,13 @@ class ClearMapTask(BaseGfTask):
                 )
             else:
                 self.skip_dialogs(end_match=map_re)
-            done.update(name_group)
-            cursor = current_map.name
-            # 推过一关后，之前未解锁的关卡可能已经解锁，重新判定
-            locked.clear()
+            count += 1
+            session_done.update(group)
+            self.record_cleared(name)
+            cursor = name
+            locked.clear()  # 推过一关后，之前未解锁的关卡可能已经解锁
+            last_scroll = None
             self.close_map_panel()
-
-    def close_map_panel(self):
-        """
-        关卡面板打开时才按返回；选关页面没有面板时按返回会直接退出到章节页面。
-        """
-        self.sleep(0.5)
-        if self.ocr(box="right", match=[re.compile("推荐等级"), "挑战目标", "特殊奖励", "敌方单位"]):
-            self.back(after_sleep=1.5)
 
 
 def merge_maps(maps, x_threshold=40, y_threshold=40):
