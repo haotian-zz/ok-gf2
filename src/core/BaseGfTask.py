@@ -878,8 +878,17 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return has_progress and len(names) <= 3
 
     def auto_battle(
-        self, end_match=None, end_box=None, has_dialog=False, need_click_auto=False, has_dialog_behind_start=False
+        self,
+        end_match=None,
+        end_box=None,
+        has_dialog=False,
+        need_click_auto=False,
+        has_dialog_behind_start=False,
+        keep_lineup=False,
     ):
+        """
+        :param keep_lineup: 这一轮是点「继续前进」进来的，阵容（含助战）沿用上一段，不再整理直接开战
+        """
         self.info_set("current_task", "auto battle")
         result = self.skip_dialogs(
             end_match=["作战开始", "行动结束", "继续前进"],
@@ -900,12 +909,16 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 has_dialog=has_dialog,
                 need_click_auto=need_click_auto,
                 has_dialog_behind_start=has_dialog_behind_start,
+                keep_lineup=True,
             )
             return
         if result[0].name == "作战开始":
             self.sleep(2)
-            if self.LINEUP_TASK or self.config.get("借好友助战", False):
+            if keep_lineup:
+                self.log_info("继续前进进来的下一段，沿用上一段阵容直接开战", notify=False)
+            elif self.LINEUP_TASK or self.config.get("借好友助战", False):
                 self.prepare_lineup()
+            if keep_lineup or self.LINEUP_TASK or self.config.get("借好友助战", False):
                 if self._deploy_button()[0] in ("withdraw", "blocked"):
                     self._clear_selection()
                 result = self.wait_ocr(match="作战开始", box=self.box.bottom, time_out=10, raise_if_not_found=True)
@@ -943,6 +956,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                     has_dialog=has_dialog,
                     need_click_auto=need_click_auto,
                     has_dialog_behind_start=has_dialog_behind_start,
+                    keep_lineup=True,
                 )
                 return
             ok_bool = bool(start_result) and (
@@ -973,6 +987,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                             has_dialog=has_dialog,
                             need_click_auto=need_click_auto,
                             has_dialog_behind_start=has_dialog_behind_start,
+                            keep_lineup=True,
                         )
                         return
                     if self.wait_ocr(match="注意", box=self.box.top):
@@ -1029,6 +1044,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 has_dialog=has_dialog,
                 need_click_auto=need_click_auto,
                 has_dialog_behind_start=has_dialog_behind_start,
+                keep_lineup=True,
             )
             return
         if cont := self.wait_ocr(match="继续前进", box=self.box.bottom_right, raise_if_not_found=False, time_out=3):
@@ -1040,6 +1056,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 has_dialog=has_dialog,
                 need_click_auto=need_click_auto,
                 has_dialog_behind_start=has_dialog_behind_start,
+                keep_lineup=True,
             )
             return
         while self.wait_click_ocr(match="确认", box=self.box.bottom_right, raise_if_not_found=False, time_out=3):
@@ -1068,6 +1085,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                         has_dialog=has_dialog,
                         need_click_auto=need_click_auto,
                         has_dialog_behind_start=has_dialog_behind_start,
+                        keep_lineup=True,
                     )
                     return
                 if match[0].name in ("确认", "确认结算"):
