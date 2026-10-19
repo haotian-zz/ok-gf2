@@ -207,11 +207,18 @@ class ClearMapTask(BaseGfTask):
             if self.find_boxes(boxes, match=pop_ups):
                 self.back(after_sleep=1)
                 continue
+            # 认不出的页面多半是剧情对话（没有可识别文字），按 skip_dialogs 的方式点右上角跳过
             unknown += 1
-            if unknown >= 3:
+            self.log_info("当前页面没有可识别的按钮，按剧情处理尝试跳过", notify=False)
+            found = self.skip_dialogs(
+                end_match=[map_re, "作战开始", "继续前进", "任务完成", "任务失败", "确认", "确认结算"],
+                time_out=90,
+                has_dialog=True,
+                raise_if_not_found=False,
+            )
+            if not found and unknown >= 2:
                 self.debug_shot("resume_unknown", boxes)
                 return False
-            self.sleep(3)
         return False
 
     def go_to_chapter_start(self):
