@@ -11,6 +11,19 @@ logger = Logger.get_logger(__name__)
 
 
 PANEL_WORDS = ["特殊奖励", "观看", "挑战", "完成前置关卡解锁"]
+# 面板底部按钮：实机上 OCR 常把「观看」只框出一个「观」（0.81），所以第二个字可有可无
+BUTTON_RE = [re.compile(r"^观\s*看?$"), re.compile(r"^挑\s*战?$")]
+BUTTON_MIN_Y = 0.85  # 按钮在面板最底下，只认 y 在这以下的框，避免描述文字里的字混进来
+
+
+def button_kind(text):
+    """按钮文字 -> watch / challenge / None，容忍只读到第一个字。"""
+    text = (text or "").strip().replace(" ", "")
+    if text in ("观", "观看"):
+        return "watch"
+    if text in ("挑", "挑战"):
+        return "challenge"
+    return None
 
 
 def classify_panel(has_boxes, locked_hint, special_reward, challenge, watch):
@@ -150,6 +163,16 @@ class ClearMapTask(BaseGfTask):
         )
         status, action = self.panel_status(boxes)
         for _ in range(3):
+            if status != "unknown":
+                break
+            # 有「特殊奖励」却没按钮：单独在右下角找按钮，容忍 OCR 只读到「观」/「挑」
+            btn_boxes = self.ocr(box="bottom_right", match=BUTTON_RE, log=True) or []
+            for b in btn_boxes:
+                kind = button_kind(b.name)
+                if kind and b.y >= self.height * BUTTON_MIN_Y:
+                    self.log_info(f"右下角按钮读到 '{b.name}'，按 {kind} 处理", notify=False)
+                    status, action = kind, [b]
+                    break
             if status != "unknown":
                 break
             self.sleep(0.6)

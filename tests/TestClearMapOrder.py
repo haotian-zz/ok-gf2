@@ -32,7 +32,15 @@ from src.core.support_select import (
     pick_candidates,
     read_badge,
 )
-from src.tasks.ClearMapTask import canonical_name, classify_panel, merge_maps, order_maps, pick_candidate
+from src.tasks.ClearMapTask import (
+    BUTTON_RE,
+    button_kind,
+    canonical_name,
+    classify_panel,
+    merge_maps,
+    order_maps,
+    pick_candidate,
+)
 
 
 class TestMapRe(unittest.TestCase):
@@ -104,6 +112,18 @@ class TestPickCandidate(unittest.TestCase):
         self.assertEqual(classify_panel(True, True, True, [], []), ("locked", None))
         self.assertEqual(classify_panel(True, False, False, [], []), ("cleared", None))
         self.assertEqual(classify_panel(False, False, False, [], []), ("nopanel", None))
+
+    def test_button_kind(self):
+        # SL-5-3 实录：右半屏 OCR 只框出「观」(0.81)
+        self.assertEqual(button_kind("观"), "watch")
+        self.assertEqual(button_kind("观看"), "watch")
+        self.assertEqual(button_kind("挑 战"), "challenge")
+        self.assertEqual(button_kind("挑"), "challenge")
+        self.assertIsNone(button_kind("观看者"))
+        self.assertIsNone(button_kind(""))
+        self.assertTrue(any(r.match("观") for r in BUTTON_RE))
+        self.assertTrue(any(r.match("挑战") for r in BUTTON_RE))
+        self.assertFalse(any(r.match("观看者") for r in BUTTON_RE))
 
     def test_parse_deploy_count(self):
         self.assertEqual(parse_deploy_count("4/4作战效能"), (4, 4))
