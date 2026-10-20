@@ -44,6 +44,7 @@ class DailyBattleMixin:
             self.ensure_main()
             return
         self.info_set("current_task", "battle")
+        self.set_lineup_kind("体力本")
         self.wait_click_ocr(
             match=re.compile("战役推进"), box=self.box.top_right, after_sleep=0.5, raise_if_not_found=True
         )
@@ -83,6 +84,7 @@ class DailyBattleMixin:
             self.ensure_main()
             return
         self.info_set("current_task", "arena")
+        self.set_lineup_kind("竞技场")
         self.wait_click_ocr(
             match=re.compile("战役推进"), box=self.box.top_right, after_sleep=1, raise_if_not_found=True
         )
@@ -179,6 +181,7 @@ class DailyBattleMixin:
 
     def guild(self):
         self.info_set("current_task", "guild")
+        self.set_lineup_kind("班组")
         if result := self.wait_ocr(match=["班组"], box=self.box._group, raise_if_not_found=True):
             self.click_box_by_match_position(result, "班组", after_sleep=2)
             self.wait_click_ocr(match=["要务"], box=self.box.bottom_right, after_sleep=0.5, settle_time=2)

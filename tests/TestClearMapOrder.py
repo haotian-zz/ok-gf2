@@ -254,6 +254,20 @@ class TestStaminaPopup(unittest.TestCase):
         self.assertIsNone(tab_count(boxes, 488, 323, self.h))
 
 
+class TestPresetByKind(unittest.TestCase):
+    def test_kind_falls_back_to_default(self):
+        from src.core.lineup_config import preset_name_for_kind
+
+        cfg = {"编队名": "编队1", "竞技场编队": "编队3", "体力本编队": "  ", "班组编队": "", "活动编队": "编队5"}
+        self.assertEqual(preset_name_for_kind(cfg, "竞技场"), "编队3")
+        self.assertEqual(preset_name_for_kind(cfg, "体力本"), "编队1")
+        self.assertEqual(preset_name_for_kind(cfg, "班组"), "编队1")
+        self.assertEqual(preset_name_for_kind(cfg, "活动"), "编队5")
+        self.assertEqual(preset_name_for_kind(cfg, "推图"), "编队1")
+        self.assertEqual(preset_name_for_kind(cfg, None), "编队1")
+        self.assertEqual(preset_name_for_kind({"编队名": ""}, "竞技场"), "")
+
+
 class TestZilvLocked(unittest.TestCase):
     def test_gray_gap_rule(self):
         from src.core.BaseGfTask import zilv_locked

@@ -464,6 +464,7 @@ class DailyActivityMixin:
     def activity(self):
         activity_wuzi_names = [name.strip() for name in str(self.config.get("当前物资关卡名称")).split("-")]
         self.info_set("current_task", "activity")
+        self.set_lineup_kind("活动")
         if to_activity_page := self.wait_click_ocr(
             match=["限时开启"], box=self.box.top_right, after_sleep=2, raise_if_not_found=False, time_out=4
         ):

@@ -237,6 +237,8 @@ class DailyTaskRunner:
         self.final_summary["current_task"] = key
         self.task.log_info(self._tr("开始任务: {key}").format(key=self._tr(key)))
         self.task.ensure_main(**self.ensure_main_kwargs)
+        if hasattr(self.task, "set_lineup_kind"):
+            self.task.set_lineup_kind(None)
         try:
             result = func()
         except TaskDisabledException:

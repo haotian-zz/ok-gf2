@@ -200,6 +200,7 @@ class DailyTask(
         if not self.config.get("已确认启用游戏内全局自动功能"):
             self.confirm_auto_battle_up()
         self._zilv_locked = False
+        self.reset_lineup(None)
         self.start_watchdog()
         try:
             record = None

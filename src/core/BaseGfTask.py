@@ -37,7 +37,7 @@ from src.core.support_select import (
 )
 from src.core.debug_config import DEBUG_OPTION_NAME, KEY_DEBUG_SHOT
 from src.core.stamina_config import KEY_AUTO_POTION, STAMINA_OPTION_NAME
-from src.core.lineup_config import KEY_FALLBACK, KEY_MIN_BADGE, KEY_PRESET, KEY_ROLE, LINEUP_OPTION_NAME
+from src.core.lineup_config import KEY_FALLBACK, KEY_MIN_BADGE, KEY_ROLE, LINEUP_OPTION_NAME, preset_name_for_kind
 from src.data.FeatureList import FeatureList as fL
 from src.image.frame_processs import isolate_by_hsv_ranges
 from src.image.hsv_config import HSVRange as hR
@@ -541,7 +541,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return self.get_global_config(LINEUP_OPTION_NAME)
 
     def _preset_name(self):
-        return (self._lineup_cfg().get(KEY_PRESET) or "").strip()
+        return preset_name_for_kind(self._lineup_cfg(), self._lineup_kind)
 
     def _preset_boxes(self):
         return self._ocr_panel(PRESET_BOX, match=[re.compile(r"编队\s*\d"), re.compile(r"整备室配置"), re.compile(r".{1,12}")])
@@ -899,7 +899,27 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return False
 
     LINEUP_TASK = False  # 会进部署界面并需要整理阵容的任务置 True（推图）
-    _lineup_verified = False  # 本次任务已经整理过一次阵容；任务 run 开头置回 False
+    # 阵容是按关卡类型（推图/竞技场/体力本/班组/活动）整理的：每种类型在一次任务里只整理一次，之后沿用；
+    # _lineup_kind 为 None 表示这段战斗不整理阵容（没进部署界面的任务用）
+    _lineup_kind = None
+    _lineup_verified_kinds = None
+
+    def set_lineup_kind(self, kind):
+        """进战斗前声明这是哪种关卡，决定用全局「阵容与助战」里的哪个编队；None = 不整理阵容"""
+        self._lineup_kind = kind
+
+    def reset_lineup(self, kind=None):
+        """任务 run 开头调用：清掉"已整理过"的记录，并设定当前关卡类型"""
+        self._lineup_verified_kinds = set()
+        self._lineup_kind = kind
+
+    def _lineup_verified(self):
+        return self._lineup_verified_kinds is not None and self._lineup_kind in self._lineup_verified_kinds
+
+    def _mark_lineup_verified(self):
+        if self._lineup_verified_kinds is None:
+            self._lineup_verified_kinds = set()
+        self._lineup_verified_kinds.add(self._lineup_kind)
 
     def prepare_lineup(self):
         """
@@ -1227,8 +1247,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             return
         if result[0].name == "作战开始":
             self.sleep(2)
-            lineup_on = self.LINEUP_TASK or self.config.get("借好友助战", False)
-            if lineup_on and (keep_lineup or self._lineup_verified):
+            lineup_on = self.LINEUP_TASK or self.config.get("借好友助战", False) or self._lineup_kind is not None
+            if lineup_on and (keep_lineup or self._lineup_verified()):
                 # 任务启动后只在第一次进部署界面时整理阵容；之后不管是「继续前进」还是从选关面板「挑战」进来，
                 # 游戏都沿用上一场的阵容（含助战），只看一眼人数没缺就直接开战
                 count = self._deploy_count()
@@ -1238,8 +1258,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 else:
                     self.log_info("阵容已整理过，沿用上一场直接开战", notify=False)
             elif lineup_on:
+                self.log_info(f"第一次进「{self._lineup_kind or '推图'}」部署界面，整理阵容（编队：{self._preset_name() or '不切'}）", notify=True)
                 self.prepare_lineup()
-                self._lineup_verified = True
+                self._mark_lineup_verified()
             if lineup_on:
                 if self._deploy_button()[0] in ("withdraw", "blocked"):
                     self._clear_selection()
