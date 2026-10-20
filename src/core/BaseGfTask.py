@@ -70,6 +70,7 @@ STAMINA_TAB_DX = 0.161  # 相邻页签中心的水平间距，单位：画面高
 STAMINA_SAFE_TABS = (0, 1)  # 只允许点前两个页签（储存、道具），第三个是坍塌晶条
 PRESET_BOX = (0.75, 0.06, 0.995, 0.86)  # 「使用整备室配置」下拉框及其展开的编队列表
 PRESET_HEADER_Y = 0.12  # 下拉框标题在这条线以上，展开后的「整备室配置」选项在以下
+PRESET_HEADER_MIN_X = 0.77  # 下拉框标题文字从 x≈0.80 开始
 MAX_CONTINUE_STREAK = 8  # 连续点「继续前进」却没进入战斗的次数上限
 WATCHDOG_TIMEOUT = 120  # 秒：这么久没有任何进展（没点击、没日志、没换阶段）看门狗就截图报警
 WATCHDOG_KILL_LEVEL = 2  # 停滞达到 WATCHDOG_TIMEOUT 的这个倍数、而且不是人为暂停，就自动停止任务
@@ -564,7 +565,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
     def _preset_state(self):
         """下拉框区域 OCR：(全部, 标题行, 标题下方, 下方里的编队/整备室配置条目)。条目 >= 2 说明列表展开着。"""
         boxes = self._preset_boxes()
-        header = [b for b in boxes if b.y < self.height * PRESET_HEADER_Y]
+        # 地图上敌方单位的名字标签（实录：扩编实练的「徒从-0331」）会飘进面板左上角，标题只认下拉框里的文字
+        header = [b for b in boxes if b.y < self.height * PRESET_HEADER_Y and b.x >= self.width * PRESET_HEADER_MIN_X]
         below = [b for b in boxes if b.y > self.height * PRESET_HEADER_Y]
         entries = [b for b in below if re.search(r"编队\s*\d", b.name) or "整备室配置" in b.name]
         return boxes, header, below, entries
