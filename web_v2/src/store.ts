@@ -221,14 +221,54 @@ function connectEvents(get: () => State) {
 }
 
 /** 从目录模板生成默认流程（第一次打开、或 workflows.json 为空时） */
-function workflowsFromTemplates(catalog: Catalog): Workflow[] {
+/**
+ * 块加进流程时把后端当时的值复制进来（开关 + 选项），之后这份值只属于这个流程。
+ * 不能用代码默认值：用户在后端关掉的东西（如商店心愿单购买）会被默认值悄悄打开（实录 2026-10-20）。
+ */
+function snapshotItem(item: WorkflowItem, catalog: Catalog, tasks: TaskInfo[]): WorkflowItem {
+  const comp = componentById(catalog, tasks, item.component);
+  const task = comp ? taskByClass({ tasks }, comp.task) : undefined;
+  if (!comp || !task) return item;
+  let config = item.config;
+  for (const key of entryOptionKeys(comp, task)) {
+    if (key in config) continue;
+    const f = fieldOf(task, key);
+    if (!f) continue;
+    if (config === item.config) config = { ...config };
+    config[key] = f.value;
+  }
+  return config === item.config ? item : { ...item, config };
+}
+
+function newItem(componentId: string, catalog: Catalog, tasks: TaskInfo[]): WorkflowItem {
+  const comp = componentById(catalog, tasks, componentId);
+  const task = comp ? taskByClass({ tasks }, comp.task) : undefined;
+  const enableField = comp?.enable_key && task ? fieldOf(task, comp.enable_key) : undefined;
+  const enabled = enableField ? !!enableField.value : true;
+  return snapshotItem({ uid: newUid(), component: componentId, enabled, config: {}, lineup: {} }, catalog, tasks);
+}
+
+function snapshotWorkflows(list: Workflow[], catalog: Catalog, tasks: TaskInfo[]): Workflow[] {
+  let changed = false;
+  const out = list.map((wf) => {
+    const items = wf.items.map((i) => snapshotItem(i, catalog, tasks));
+    if (items.some((it, idx) => it !== wf.items[idx])) {
+      changed = true;
+      return { ...wf, items };
+    }
+    return wf;
+  });
+  return changed ? out : list;
+}
+
+function workflowsFromTemplates(catalog: Catalog, tasks: TaskInfo[]): Workflow[] {
   return catalog.templates.map((t) => ({
     id: t.id,
     label: t.label,
     icon: t.icon,
     desc: t.desc,
     presets: t.presets,
-    items: t.components.map((c) => ({ uid: newUid(), component: c, enabled: true, config: {}, lineup: {} })),
+    items: t.components.map((c) => newItem(c, catalog, tasks)),
   }));
 }
 
@@ -309,7 +349,8 @@ export const useStore = create<State>((set, get) => {
         for (const key of entryOptionKeys(comp, task)) {
           const f = fieldOf(task, key);
           if (!f) continue;
-          desired.set(key, key in item.config ? item.config[key] : f.default !== undefined ? f.default : f.value);
+          // 只写这个流程里记下的值；没记（理论上加块时已经复制过）就不动后端
+          if (key in item.config) desired.set(key, item.config[key]);
         }
       }
       for (const [key, value] of desired) {
@@ -372,11 +413,15 @@ export const useStore = create<State>((set, get) => {
         set({ catalog, title: ui.title || '少前2 自动化', connectionError: null });
         document.title = ui.title || '少前2 自动化';
         await get().refreshAll();
-        let workflows = normalizeWorkflows(await endpoints.getWorkflows().catch(() => null));
+        const loaded = normalizeWorkflows(await endpoints.getWorkflows().catch(() => null));
+        let workflows = loaded;
         if (!workflows.length) {
-          workflows = workflowsFromTemplates(catalog);
-          endpoints.saveWorkflows({ version: WORKFLOWS_VERSION, workflows }).catch(() => {});
+          workflows = workflowsFromTemplates(catalog, get().tasks);
+        } else {
+          // 旧文件里没记值的键，补上后端当前值
+          workflows = snapshotWorkflows(workflows, catalog, get().tasks);
         }
+        if (workflows !== loaded) endpoints.saveWorkflows({ version: WORKFLOWS_VERSION, workflows }).catch(() => {});
         set({ workflows, ready: true });
         connectEvents(get);
         get().refreshLogs().catch(() => {});
@@ -471,7 +516,7 @@ export const useStore = create<State>((set, get) => {
       const catalog = get().catalog;
       const tpl = fromTemplate && catalog ? catalog.templates.find((t) => t.id === fromTemplate) : undefined;
       const wf: Workflow = tpl
-        ? { ...workflowsFromTemplates({ ...catalog!, templates: [tpl] })[0], id, label: label || tpl.label }
+        ? { ...workflowsFromTemplates({ ...catalog!, templates: [tpl] }, get().tasks)[0], id, label: label || tpl.label }
         : { id, label: label || '新流程', icon: NEW_WORKFLOW_ICON, items: [] };
       updateWorkflows((list) => [...list, wf]);
       get().setWorkflow(id);
@@ -535,7 +580,9 @@ export const useStore = create<State>((set, get) => {
         toast.info('这一块已经在流程里了（同一块在一个流程里只能有一份）');
         return;
       }
-      const item: WorkflowItem = { uid: newUid(), component: componentId, enabled: true, config: {}, lineup: {} };
+      const catalog = get().catalog;
+      if (!catalog) return;
+      const item = newItem(componentId, catalog, get().tasks);
       updateCurrentItems((items) => [...items, item]);
       set({ justAdded: item.uid });
       window.setTimeout(() => get().justAdded === item.uid && set({ justAdded: null }), 400);
@@ -564,7 +611,22 @@ export const useStore = create<State>((set, get) => {
       );
     },
     resetItem(uid) {
-      updateCurrentItems((items) => items.map((i) => (i.uid === uid ? { ...i, config: {}, lineup: {} } : i)));
+      const catalog = get().catalog;
+      const tasks = get().tasks;
+      updateCurrentItems((items) =>
+        items.map((i) => {
+          if (i.uid !== uid || !catalog) return i;
+          const comp = componentById(catalog, tasks, i.component);
+          const task = comp ? taskByClass({ tasks }, comp.task) : undefined;
+          const config: Record<string, unknown> = {};
+          if (comp && task)
+            for (const key of entryOptionKeys(comp, task)) {
+              const f = fieldOf(task, key);
+              if (f) config[key] = f.default !== undefined ? f.default : f.value;
+            }
+          return { ...i, config, lineup: {} };
+        }),
+      );
       toast.success('已恢复这一块的默认值');
     },
     setAllEnabled(enabled) {
@@ -839,12 +901,25 @@ export function entryOptionKeys(component: CatalogComponent, task: TaskInfo | un
   return component.keys;
 }
 
-/** 把块在这个流程里的值套到任务字段上（没写的键用默认值），给选项编辑器用 */
+/** 把块在这个流程里的值套到任务字段上（没记的键显示后端当前值），给选项编辑器用 */
 export function itemFields(item: WorkflowItem, task: TaskInfo): ConfigField[] {
   return task.config.map((f) => ({
     ...f,
-    value: f.key in item.config ? item.config[f.key] : f.default !== undefined ? f.default : f.value,
+    value: f.key in item.config ? item.config[f.key] : f.value,
   }));
+}
+
+/** 这一块在这个流程里有多少项和代码默认值不一样（选项 + 阵容） */
+export function itemChangedCount(item: WorkflowItem, component: CatalogComponent, task: TaskInfo | undefined): number {
+  let n = Object.keys(item.lineup).length;
+  if (!task) return n;
+  for (const key of entryOptionKeys(component, task)) {
+    if (!(key in item.config)) continue;
+    const f = fieldOf(task, key);
+    const def = f ? (f.default !== undefined ? f.default : f.value) : undefined;
+    if (JSON.stringify(item.config[key]) !== JSON.stringify(def)) n++;
+  }
+  return n;
 }
 
 // ---------- 阵容场景（全局「阵容与助战」里的 <场景>编队 / <场景>助战） ----------

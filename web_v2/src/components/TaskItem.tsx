@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { ChevronRight, Play, RotateCcw, Trash2, Zap, ZapOff } from 'lucide-react';
 import type { CatalogComponent, ConfigField, TaskInfo, Workflow, WorkflowItem } from '@/api';
-import { entryOptionKeys, itemFields, taskProgress, useStore } from '@/store';
+import { entryOptionKeys, itemChangedCount, itemFields, taskProgress, useStore } from '@/store';
 import { Checkbox } from './ui/Checkbox';
 import { ConfirmDialog } from './ui/Modal';
 import { OptionList } from './OptionEditor';
@@ -76,7 +76,7 @@ export function TaskItem({
   const optionFields = optionKeys.map((k) => fields.find((f) => f.key === k)).filter((f): f is ConfigField => !!f);
   const canExpand = !!task && (optionFields.length > 0 || scopes.length > 0 || !!component.doc || !!task.description);
   const executorRunning = !!status.running && !!status.current_task;
-  const changedKeys = Object.keys(item.config).length + Object.keys(item.lineup).length;
+  const changedKeys = itemChangedCount(item, component, task);
 
   // 运行状态：子项看「当前任务」是否就是它；整任务块看任务自己的 running
   const runStatus: 'idle' | 'running' | 'done' | 'retry' = (() => {
