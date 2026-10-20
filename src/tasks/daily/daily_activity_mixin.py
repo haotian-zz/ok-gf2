@@ -12,6 +12,9 @@ from src.tasks.daily.daily_common_mixin import (
 )
 
 activity_time_re = re.compile(r"^(\d+)\s*(?:天|days?)\s*(\d+)\s*(?:小时|hours?)", re.I)
+# 今天已经吃过/喝过时，点「下一步/制作」会弹「提示：当前已有 章鱼小丸子 生效中，是否确认更换?」
+# （实录截图 tests/fixtures/food_already_active_1280x768.png；菜名是橙色，OCR 可能把这句拆成几段）
+food_active_re = re.compile(r"生效中|是否确认更换|已有.{0,12}生效")
 
 
 class DailyActivityMixin:
@@ -159,7 +162,9 @@ class DailyActivityMixin:
                         skip_end_match=["饮品加成"],
                         need_extra_confirm=False,
                     )
-                    if drink_result is not True:
+                    if drink_result == "done":
+                        self.log_info("今天已经喝过了，跳过喝水", notify=False)
+                    elif drink_result is not True:
                         if drink_result == "entry":
                             self.log_warning(
                                 "未找到茶歇一刻入口，角色可能被挡住，请检查「喝水」按键时长，参考 1.087-1.0-0.8"
@@ -180,7 +185,9 @@ class DailyActivityMixin:
                         need_extra_confirm=True,
                         need_again_test=True,
                     )
-                    if eat_result is not True:
+                    if eat_result == "done":
+                        self.log_info("今天已经吃过了，跳过吃饭", notify=False)
+                    elif eat_result is not True:
                         self.log_warning("吃饭流程未完成，请检查移动是否到位或界面是否已加载完成")
                         completed = False
             else:
@@ -371,6 +378,8 @@ class DailyActivityMixin:
             else:
                 return "entry"
             if self.wait_click_ocr(match=main_btn, box=self.box.bottom_right, time_out=10):
+                if self._dismiss_already_active(entry_match.pattern):
+                    return "done"
                 if not self.wait_click_ocr(match=second_btn, time_out=3, after_sleep=2):
                     # 实录：今天已经吃过饭时点「下一步」后不会出现「确认邀请」，留下画面文字和截图，好判断是不是"已完成"
                     texts = [b.name for b in self.ocr()]
@@ -390,6 +399,21 @@ class DailyActivityMixin:
                     self.back(after_sleep=2)
                     return "button"
         return "button"
+
+    def _dismiss_already_active(self, what):
+        """
+        点「下一步/制作」后弹出「当前已有 xx 生效中，是否确认更换?」说明今天已经吃过/喝过：
+        点「取消」（千万不能点确认，会把材料再花一遍），当作这项已完成。
+        """
+        if not self.wait_ocr(match=food_active_re, time_out=2, raise_if_not_found=False, log=True):
+            return False
+        self.log_info(f"今天已经有「{what}」的效果在生效中，点取消，这项算完成", notify=True)
+        self.screenshot("food_already_active")
+        if cancel := self.ocr(match=self.fix_match_regex(["取消"]), box=self.box.bottom):
+            self.click(cancel, after_sleep=1)
+        else:
+            self.back(after_sleep=1)
+        return True
 
     def go_drink(self, after_sleep=None):
         down_times = parse_time_option(self.config.get("喝水"))

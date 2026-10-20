@@ -247,7 +247,19 @@ class TestStaminaPopup(unittest.TestCase):
         self.assertIsNone(tab_count(boxes, 488, 323, self.h))
 
 
-class TestLoadingFrame(unittest.TestCase):
+class TestFoodAlreadyActive(unittest.TestCase):
+    def test_dialog_text_variants(self):
+        from src.tasks.daily.daily_activity_mixin import food_active_re
+
+        # 实录弹窗：当前已有 章鱼小丸子 生效中，是否确认更换?（菜名橙色，OCR 可能拆开）
+        for text in ["当前已有章鱼小丸子生效中，是否确认更换?", "生效中，是否确认更换?", "是否确认更换"]:
+            self.assertIsNotNone(food_active_re.search(text), text)
+        for text in ["确认邀请", "下一步", "制作", "取消", "今日不再提示", "当前已有"]:
+            self.assertIsNone(food_active_re.search(text), text)
+
+
+class TestElmoLoadingFrame(unittest.TestCase):
+    # 之前这个类和上面的 TestLoadingFrame 重名，把它的用例盖掉了（Ran 34 而不是 37）
     def test_elmo_transition_is_loading(self):
         # 实录：离开活动层的「艾莫号」过场有一大段介绍文字，之前因为文字多于 3 条被当成非加载页
         names = ["艾莫号是指挥官所拥有的陆地行动单元，结构复杂", "NOW LOADING.", "移动中...69%", "ELMO", "TIME"]
