@@ -67,6 +67,79 @@
     state.settings = await get("/api/settings");
   }
 
+  // ---------- 阵容场景（全局「阵容与助战」里的 <场景>编队 / <场景>助战） ----------
+  // 优先级：内置默认 → 全局值 → 场景单独设置；场景留空 / 「沿用全局」就继承
+  const LINEUP_GROUP = "阵容与助战";
+  const LINEUP_PRESET = "编队名";
+  const LINEUP_SUPPORT = "借好友助战";
+  const SUPPORT_INHERIT = "沿用全局";
+  const lineupGroup = () => state.settings.find((g) => g.name === LINEUP_GROUP);
+  const lineupField = (key) => { const g = lineupGroup(); return g && g.fields.find((f) => f.key === key); };
+  const lineupValue = (key) => { const f = lineupField(key); return f ? f.value : undefined; };
+  // 有「X编队」键的 X 就是一个场景（「编队名」不以「编队」结尾，不会混进来）
+  const lineupScopes = () => {
+    const g = lineupGroup();
+    return g ? g.fields.filter((f) => f.key.endsWith("编队")).map((f) => f.key.slice(0, -2)) : [];
+  };
+  const isScopeKey = (key) => lineupScopes().some((s) => key === `${s}编队` || key === `${s}助战`);
+  function scopeState(scope) {
+    const preset = String(lineupValue(`${scope}编队`) ?? "").trim();
+    const globalPreset = String(lineupValue(LINEUP_PRESET) ?? "").trim();
+    const supportField = lineupField(`${scope}助战`);
+    const support = supportField ? supportField.value || SUPPORT_INHERIT : null;
+    const globalSupport = lineupValue(LINEUP_SUPPORT) !== false;
+    return {
+      preset, globalPreset,
+      effectivePreset: preset || globalPreset || "不切编队",
+      support, globalSupport,
+      effectiveSupport: support === null ? null : support === SUPPORT_INHERIT ? globalSupport : support === "开",
+      overridden: !!preset || (support !== null && support !== SUPPORT_INHERIT),
+    };
+  }
+  async function saveLineup(key, value) {
+    const updated = await post(`/api/settings/${encodeURIComponent(LINEUP_GROUP)}/config`, { key, value });
+    const idx = state.settings.findIndex((x) => x.name === updated.name);
+    if (idx >= 0) state.settings[idx] = updated;
+  }
+  async function resetScope(scope) {
+    if (lineupField(`${scope}编队`)) await saveLineup(`${scope}编队`, "");
+    if (lineupField(`${scope}助战`)) await saveLineup(`${scope}助战`, SUPPORT_INHERIT);
+  }
+
+  function renderLineupCard(scope, rerender) {
+    if (!lineupField(`${scope}编队`)) return null;
+    const st = scopeState(scope);
+    const card = el("div", { class: "lineup-card" + (st.overridden ? " overridden" : "") });
+    const head = el("div", { class: "lineup-head" }, el("span", { class: "lineup-title", text: `阵容 · ${scope}` }));
+    if (st.overridden) head.append(el("span", { class: "badge", text: "已单独设置" }));
+    head.append(el("button", {
+      class: "btn small ghost", text: "恢复全局", disabled: st.overridden ? null : "disabled",
+      onclick: () => resetScope(scope).then(rerender).catch((err) => toast(`保存失败：${err.message}`, true)),
+    }));
+    card.append(head);
+    const commit = (key, v) => saveLineup(key, v).then(rerender).catch((err) => toast(`保存失败：${err.message}`, true));
+
+    const presetInput = el("input", { type: "text", value: st.preset, placeholder: `沿用全局（${st.globalPreset || "不切编队"}）` });
+    presetInput.addEventListener("change", () => commit(`${scope}编队`, presetInput.value.trim()));
+    card.append(el("div", { class: "lineup-row" },
+      el("div", { class: "f-label", text: "编队" }),
+      el("div", { class: "f-desc", text: "整备室配置里的编队名，留空沿用全局" }),
+      el("div", { class: "f-ctl" }, presetInput)));
+
+    if (st.support !== null) {
+      const seg = el("div", { class: "seg" });
+      const choices = [[SUPPORT_INHERIT, `沿用全局（${st.globalSupport ? "开" : "关"}）`], ["开", "开"], ["关", "关"]];
+      for (const [value, label] of choices) {
+        seg.append(el("button", { class: "seg-btn" + (st.support === value ? " on" : ""), text: label, onclick: () => commit(`${scope}助战`, value) }));
+      }
+      card.append(el("div", { class: "lineup-row" },
+        el("div", { class: "f-label", text: "借好友助战" }),
+        el("div", { class: "f-desc", text: `这一场景实际：${st.effectiveSupport ? "借" : "不借"}` }),
+        el("div", { class: "f-ctl" }, seg)));
+    }
+    return card;
+  }
+
   // 日常任务里没被任何板块/全局区收编的键，自动收进「其它」组，保证一项都不丢
   function ensureLeftoverEntry() {
     const cat = state.catalog;
@@ -190,6 +263,10 @@
       if (!f) continue;   // 被联动隐藏，或键不存在
       panel.append(renderField(f, (value) => setTaskConfig(task, key, value), key !== e.enable_key && f.sub_config));
       shown++;
+    }
+    for (const scope of e.lineup_scopes || []) {
+      const card = renderLineupCard(scope, renderOptions);
+      if (card) { panel.append(card); shown++; }
     }
     if (!shown) panel.append(el("p", { class: "muted", text: "这一项没有可调的选项。" }));
   }
@@ -420,7 +497,9 @@
     for (const g of state.settings) {
       const card = el("div", { class: "settings-card" }, el("h3", { text: g.name }));
       if (g.description) card.append(el("div", { class: "s-desc", text: g.description }));
+      const isLineup = g.name === LINEUP_GROUP;
       for (const f of g.fields) {
+        if (isLineup && isScopeKey(f.key)) continue;
         card.append(renderField(f, async (v) => {
           const updated = await post(`/api/settings/${encodeURIComponent(g.name)}/config`, { key: f.key, value: v });
           const idx = state.settings.findIndex((x) => x.name === updated.name);
@@ -428,8 +507,34 @@
           renderSettings();
         }, f.sub_config));
       }
+      if (isLineup) card.append(renderScopeTable());
       wrap.append(card);
     }
+  }
+
+  function entryOfScope(scope) {
+    return state.catalog.groups.flatMap((g) => g.entries).find((e) => (e.lineup_scopes || []).includes(scope));
+  }
+
+  function renderScopeTable() {
+    const box = el("div", { class: "scope-table" }, el("div", { class: "f-label", text: "各场景单独设置" }),
+      el("div", { class: "f-desc", text: "在任务页对应板块的「阵容」卡片里改；这里一览哪些场景和全局不一样。" }));
+    const table = el("table");
+    table.append(el("tr", {}, el("th", { text: "场景" }), el("th", { text: "编队" }), el("th", { text: "借助战" }), el("th", { text: "" })));
+    for (const scope of lineupScopes()) {
+      const st = scopeState(scope);
+      const presetCell = st.preset ? el("td", { class: "own", text: st.preset }) : el("td", { class: "muted", text: `沿用（${st.globalPreset || "不切"}）` });
+      const supportCell = st.support === null ? el("td", { class: "muted", text: "—" })
+        : st.support === SUPPORT_INHERIT ? el("td", { class: "muted", text: `沿用（${st.globalSupport ? "开" : "关"}）` })
+        : el("td", { class: "own", text: st.support });
+      const ops = el("td", {});
+      const entry = entryOfScope(scope);
+      if (entry) ops.append(el("button", { class: "btn small ghost", text: "去设置", onclick: () => { showPage("tasks"); selectEntry(entry); } }));
+      if (st.overridden) ops.append(el("button", { class: "btn small ghost", text: "恢复全局", onclick: () => resetScope(scope).then(renderSettings).catch((err) => toast(`保存失败：${err.message}`, true)) }));
+      table.append(el("tr", { class: st.overridden ? "overridden" : "" }, el("td", { text: scope }), presetCell, supportCell, ops));
+    }
+    box.append(table);
+    return box;
   }
 
   // ---------- 页面切换 ----------
@@ -463,7 +568,7 @@
   }
 
   async function refreshAll() {
-    await Promise.all([refreshTasks(), refreshStatus()]);
+    await Promise.all([refreshTasks(), refreshStatus(), refreshSettings()]);
     renderGroups(); renderOptions(); renderStatus();
   }
 

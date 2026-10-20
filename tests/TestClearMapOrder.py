@@ -266,6 +266,33 @@ class TestPresetByKind(unittest.TestCase):
         self.assertEqual(preset_name_for_kind(cfg, "推图"), "编队1")
         self.assertEqual(preset_name_for_kind(cfg, None), "编队1")
         self.assertEqual(preset_name_for_kind({"编队名": ""}, "竞技场"), "")
+        self.assertEqual(preset_name_for_kind({"编队名": "编队1", "尘烟前哨战编队": "尘烟队"}, "尘烟前哨战"), "尘烟队")
+        self.assertEqual(preset_name_for_kind({"编队名": "编队1", "推图编队": "推图队"}, None), "推图队")
+
+
+class TestSupportByKind(unittest.TestCase):
+    def test_default_global_scope_priority(self):
+        from src.core.lineup_config import support_enabled_for_kind
+
+        # 内置默认开
+        self.assertTrue(support_enabled_for_kind({}, None))
+        self.assertTrue(support_enabled_for_kind({}, "尘烟前哨战"))
+        # 全局关 -> 沿用全局的场景都不借
+        self.assertFalse(support_enabled_for_kind({"借好友助战": False}, "尘烟前哨战"))
+        self.assertFalse(support_enabled_for_kind({"借好友助战": False, "推图助战": "沿用全局"}, None))
+        # 场景单独设置优先于全局
+        self.assertTrue(support_enabled_for_kind({"借好友助战": False, "尘烟前哨战助战": "开"}, "尘烟前哨战"))
+        self.assertFalse(support_enabled_for_kind({"借好友助战": True, "推图助战": "关"}, None))
+        # 没有好友助战的场景永远不借
+        self.assertFalse(support_enabled_for_kind({"借好友助战": True}, "竞技场"))
+        self.assertFalse(support_enabled_for_kind({"借好友助战": True}, "未知场景"))
+
+    def test_option_has_scope_keys(self):
+        from src.core.lineup_config import SCOPES, lineup_option
+
+        for s in SCOPES:
+            self.assertIn(f"{s['name']}编队", lineup_option.default_config)
+            self.assertEqual(f"{s['name']}助战" in lineup_option.default_config, s["support"])
 
 
 class TestZilvLocked(unittest.TestCase):

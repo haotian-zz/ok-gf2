@@ -105,3 +105,26 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .toast { position: fixed; right: 18px; bottom: 18px; background: var(--text); color: var(--bg); padding: 9px 14px; border-radius: 8px; opacity: 0; transition: .2s; pointer-events: none; max-width: 60vw; }
 .toast.show { opacity: .95; }
 .toast.bad { background: var(--bad); color: #fff; }
+
+/* 阵容场景卡片（全局「阵容与助战」的 <场景>编队 / <场景>助战） */
+.lineup-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 14px; }
+.lineup-card.overridden { border-color: var(--accent); }
+.lineup-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.lineup-head .btn { margin-left: auto; }
+.lineup-title { font-weight: 600; }
+.badge { font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 1px 7px; }
+.lineup-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; padding: 8px 0; border-top: 1px solid var(--line); align-items: center; }
+.lineup-row .f-label { font-weight: 600; }
+.lineup-row .f-desc { grid-column: 1; color: var(--muted); font-size: 12px; }
+.lineup-row .f-ctl { grid-column: 2; grid-row: 1 / span 2; }
+.lineup-row input::placeholder { color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg-btn { border: 0; background: var(--panel); color: var(--text); padding: 4px 10px; cursor: pointer; font-size: 12px; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line); }
+.seg-btn.on { background: var(--accent); color: #fff; }
+.scope-table { padding-top: 10px; }
+.scope-table table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13px; }
+.scope-table th, .scope-table td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); }
+.scope-table tr.overridden td:first-child { border-left: 3px solid var(--accent); }
+.scope-table td.own { font-weight: 600; color: var(--accent); }
+.scope-table td .btn { margin-right: 4px; }

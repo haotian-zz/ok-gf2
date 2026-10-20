@@ -37,7 +37,14 @@ from src.core.support_select import (
 )
 from src.core.debug_config import DEBUG_OPTION_NAME, KEY_DEBUG_SHOT
 from src.core.stamina_config import KEY_AUTO_POTION, STAMINA_OPTION_NAME
-from src.core.lineup_config import KEY_FALLBACK, KEY_MIN_BADGE, KEY_ROLE, LINEUP_OPTION_NAME, preset_name_for_kind
+from src.core.lineup_config import (
+    KEY_FALLBACK,
+    KEY_MIN_BADGE,
+    KEY_ROLE,
+    LINEUP_OPTION_NAME,
+    preset_name_for_kind,
+    support_enabled_for_kind,
+)
 from src.data.FeatureList import FeatureList as fL
 from src.image.frame_processs import isolate_by_hsv_ranges
 from src.image.hsv_config import HSVRange as hR
@@ -543,6 +550,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
     def _preset_name(self):
         return preset_name_for_kind(self._lineup_cfg(), self._lineup_kind)
 
+    def _support_enabled(self):
+        return support_enabled_for_kind(self._lineup_cfg(), self._lineup_kind)
+
     def _preset_boxes(self):
         return self._ocr_panel(PRESET_BOX, match=[re.compile(r"编队\s*\d"), re.compile(r"整备室配置"), re.compile(r".{1,12}")])
 
@@ -936,7 +946,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if preset:
             self.info_set("current_task", "切换编队")
             self.apply_preset(preset)
-        if self.config.get("借好友助战", False):
+        if self._support_enabled():
             self.borrow_support()
         self.fill_lineup()
         self.next_frame()
@@ -1247,7 +1257,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             return
         if result[0].name == "作战开始":
             self.sleep(2)
-            lineup_on = self.LINEUP_TASK or self.config.get("借好友助战", False) or self._lineup_kind is not None
+            lineup_on = self.LINEUP_TASK or self._lineup_kind is not None
             if lineup_on and (keep_lineup or self._lineup_verified()):
                 # 任务启动后只在第一次进部署界面时整理阵容；之后不管是「继续前进」还是从选关面板「挑战」进来，
                 # 游戏都沿用上一场的阵容（含助战），只看一眼人数没缺就直接开战
