@@ -25,6 +25,11 @@ class DailyActivityMixin:
         uncertain = False
         try:
             self.wait_click_ocr(match=["活动"], box=self.box._activities, after_sleep=1, raise_if_not_found=True)
+            # 实录：点了「活动」截图里还是主页（图标只是亮了），列表根本没打开；确认一下，没开就再点一次
+            if len(self.ocr(box=self.box.right, match=["整备室", "公共区", "活动层", "招募"])) >= 2:
+                self.log_info("点了「活动」但还在主页，再点一次", notify=False)
+                self.screenshot("activity_page_not_opened")
+                self.wait_click_ocr(match=["活动"], box=self.box._activities, after_sleep=2, raise_if_not_found=True)
             for reward_activity in ("情报补给", "战前补给"):
                 self.info_set(reward_activity, "检查中")
                 if not self._open_supply_activity(reward_activity):
@@ -367,6 +372,10 @@ class DailyActivityMixin:
                 return "entry"
             if self.wait_click_ocr(match=main_btn, box=self.box.bottom_right, time_out=10):
                 if not self.wait_click_ocr(match=second_btn, time_out=3, after_sleep=2):
+                    # 实录：今天已经吃过饭时点「下一步」后不会出现「确认邀请」，留下画面文字和截图，好判断是不是"已完成"
+                    texts = [b.name for b in self.ocr()]
+                    self.log_info(f"没找到「{second_btn}」，当前画面文字: {texts[:15]}", notify=False)
+                    self.screenshot(f"food_{second_btn}_missing")
                     return "confirm"
                 if need_extra_confirm:
                     self.wait_click_ocr(match="确认", time_out=3, after_sleep=1)

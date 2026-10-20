@@ -1376,6 +1376,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         total = len(boxes) + len(feature_boxes)
         self.log_info(f"is main ocr={len(boxes)} features={len(feature_boxes)} total={total}")
         if total >= 2:
+            self._cancel_streak = 0
             return True
         # if not self.do_handle_alert()[0]:
         if self.ocr(match=re.compile("^是否离开活动层"), box=self.box.center, log=True):
@@ -1383,6 +1384,20 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             if self.wait_click_ocr(match="确认", after_sleep=2, box=self.box.bottom_right, time_out=3):
                 return False
         if box := self.ocr(box=self.box.bottom, match=["点击开始", "点击空白处关闭", "取消"], log=True):
+            if box[0].name == "取消":
+                # 实录：活动层里 ESC 弹出的离开确认框标题没被 OCR 读到，脚本反复点「取消」→ESC→再弹，60 秒后超时。
+                # 弹窗文字里有离开/退出字样、或已经连点 3 次取消还没回主页，就改点「确认」
+                self._cancel_streak = getattr(self, "_cancel_streak", 0) + 1
+                texts = [b.name for b in self.ocr()]
+                leave_like = any(re.search(r"离开|退出|返回", t) for t in texts)
+                if self._cancel_streak == 3:
+                    self.log_info(f"连续 3 次点取消都没回到主页，弹窗文字: {texts[:12]}", notify=False)
+                    self.screenshot("cancel_loop")
+                if leave_like or self._cancel_streak >= 3:
+                    if confirm := self.ocr(box=self.box.bottom, match=["确认"]):
+                        self.log_info(f"弹窗像是离开确认（{texts[:6]}），点确认", notify=False)
+                        self.click(confirm, after_sleep=2)
+                        return False
             self.click(box, after_sleep=2)
             return False
         if esc:
