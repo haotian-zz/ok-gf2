@@ -137,7 +137,7 @@ class DailyRewardMixin:
         self.ensure_main()
         if action_result is False or reward_result is False:
             return False
-        if action_result == "待核查" or reward_result == "待核查":
+        if str(action_result).startswith("待核查") or str(reward_result).startswith("待核查"):
             return "待核查"
         return True
 
@@ -159,6 +159,8 @@ class DailyRewardMixin:
             if result is True
             else "执行失败"
             if result is False
+            else result
+            if isinstance(result, str) and result.startswith("待核查：")
             else "待核查：缺少领取结果证据"
         )
         self.info_set(name, status)
@@ -196,20 +198,37 @@ class DailyRewardMixin:
         reward_title = re.compile(r"^领取奖励$")
         # 「获得道具」是奖励到账的正面证据，缺少它不能判定领取成功。
         obtained_title = re.compile(r"^获得道具$")
+        # 实录 2026-10-20：一键领取里带「标准武器自选礼箱」时会弹「请在以上奖励中选择 1 项」（1/2、取消、下一个）。
+        # 选哪把武器是玩家的事，脚本不替选：点「取消」关掉（礼箱留在背包里），结果记成待核查并说明原因。
+        choice_title = re.compile(r"请在以上奖励中选择\s*\d+\s*项")
         obtained = False
+        skipped_choice = None
         for _ in range(8):
             titles = self.wait_ocr(
-                match=[pack_title, reward_title, obtained_title],
+                match=[pack_title, reward_title, obtained_title, choice_title],
                 box=self.box_of_screen(0, 0, 1, 1),
                 time_out=4,
                 raise_if_not_found=False,
                 log=True,
             )
             if not titles:
+                if skipped_choice:
+                    return skipped_choice
                 if obtained:
                     return True
                 self.log_info("未看到获得道具，巡录领取结果待核查")
                 return "待核查"
+            if any(choice_title.search(title.name) for title in titles):
+                box_name = next((b.name for b in self.ocr(box=self.box_of_screen(0, 0, 1, 0.3)) if "自选" in b.name), "自选礼箱")
+                self.log_info(f"巡录奖励弹出「{box_name}」自选框，脚本不替你选武器，点「取消」留在背包里", notify=True)
+                self.screenshot("xunlu_choice_box")
+                if not self.wait_click_ocr(
+                    match=[re.compile(r"^取消$")], box=self.box_of_screen(0, 0.55, 1, 0.95), time_out=4, raise_if_not_found=False, after_sleep=1
+                ):
+                    self.log_error("自选框上没找到「取消」按钮，领取未完成")
+                    return False
+                skipped_choice = f"待核查：「{box_name}」需要手动选择，脚本已取消未替你选"
+                continue
             if any(obtained_title.search(title.name) for title in titles):
                 obtained = True
                 self.log_info("巡录已显示获得道具，确认奖励到账")
