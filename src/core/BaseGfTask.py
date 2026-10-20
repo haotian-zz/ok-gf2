@@ -1,3 +1,4 @@
+import functools
 import os
 import re
 import sys
@@ -6,7 +7,7 @@ import time
 import traceback
 from difflib import SequenceMatcher
 
-from ok import BaseTask, Box, Logger, find_boxes_by_name
+from ok import BaseTask, Box, Logger, TriggerTask, find_boxes_by_name
 
 from src.core.base_mixin.runtime_mixin import RuntimeMixin
 from src.core.debug_shot import save_debug_shot
@@ -79,6 +80,22 @@ TAB_FALLBACK_XY = {"我的人形": (0.815, 0.039), "好友助战": (0.902, 0.039
 restart_required_re = re.compile(r"重新启动游戏|重启游戏|需要重启")
 GAME_RESTART_TITLE_TIMEOUT = 120  # 秒：重新拉起游戏后等标题页「点击开始」的时间（实机：启动到标题约 50 秒）
 GAME_EXIT_TIMEOUT = 20  # 秒：点「确认」后等游戏自己退出的时间，超过就直接结束进程
+# 每个任务开始前的隐藏步骤「确保游戏已进入主页」
+title_start_re = re.compile(r"点击开始")  # 标题页底部的「点击开始」
+GAME_LAUNCH_MAIN_TIMEOUT = 150  # 秒：从拉起游戏到进入主页的上限（实机：启动到标题约 50 秒，再加公告弹窗）
+GAME_FRESH_SECONDS = 180  # 秒：游戏进程比这更新，就当成刚被框架拉起、还停在启动/标题页，要走一遍进主页
+
+
+def _with_game_started(run):
+    """给任务的 run 套一层：先 ensure_game_started（游戏没开就拉起、标题页点进主页），再跑任务本身。"""
+
+    @functools.wraps(run)
+    def wrapped(self, *args, **kwargs):
+        self.ensure_game_started()
+        return run(self, *args, **kwargs)
+
+    wrapped._ensures_game = True
+    return wrapped
 
 
 def box_center(box):
@@ -205,6 +222,13 @@ def zilv_locked(zilv_gray, challenge_gray, gap=ZILV_GRAY_GAP):
 
 class BaseGfTask(RuntimeMixin, BaseTask):
     """任务基类：RuntimeMixin 提供模板匹配入口重写，BaseTask 提供框架能力。"""
+
+    def __init_subclass__(cls, **kwargs):
+        # 所有任务的 run 都自动先过一遍 ensure_game_started（界面上不显示这一步）
+        super().__init_subclass__(**kwargs)
+        run = cls.__dict__.get("run")
+        if run is not None and not getattr(run, "_ensures_game", False):
+            cls.run = _with_game_started(run)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2226,6 +2250,49 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.log_info("重新启动游戏", notify=False)
         self.start_device()
         self.next_frame()
+
+    # ------------------------------------------------------------------ 任务开始前：确保游戏已进入主页
+    def _game_process_age(self):
+        """最年轻的游戏进程已经跑了多少秒；没有进程返回 None，读不到创建时间当成很久。"""
+        procs = self._game_processes()
+        if not procs:
+            return None
+        ages = []
+        for p in procs:
+            try:
+                ages.append(time.time() - p.create_time())
+            except Exception:
+                continue
+        return min(ages) if ages else float("inf")
+
+    def _on_title_screen(self):
+        self.next_frame()
+        return bool(self.ocr(box=self.box.bottom, match=title_start_re, log=True))
+
+    def ensure_game_started(self, time_out=GAME_LAUNCH_MAIN_TIMEOUT):
+        """
+        每个任务开始前自动做的隐藏步骤：
+        游戏没开 → 拉起游戏，等标题页点「点击开始」、关掉公告，直到主页；
+        游戏刚被拉起（进程很新）或停在标题页 → 同样点进主页；
+        游戏早就开着 → 什么都不做，直接开始任务（推图这类从关卡页开始的任务不会被拖回主页）。
+        触发任务（模板监控）每轮都会 run，不走这一步。
+        """
+        if isinstance(self, TriggerTask) or getattr(self, "skip_game_check", False):
+            return False
+        age = self._game_process_age()
+        launched = False
+        if age is None:
+            self.log_info("游戏没有打开，先启动游戏再开始任务", notify=True)
+            self._relaunch_game()
+            launched = True
+        elif age < GAME_FRESH_SECONDS:
+            self.log_info(f"游戏刚启动 {int(age)} 秒，先进入主页再开始任务", notify=False)
+        elif not self._on_title_screen():
+            return False
+        else:
+            self.log_info("游戏停在标题页，点「点击开始」进入主页", notify=False)
+        self.ensure_main(recheck_time=2, time_out=time_out)
+        return launched
 
     def _handle_restart_required(self):
         """
