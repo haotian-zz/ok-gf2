@@ -21,7 +21,10 @@
 
 from __future__ import annotations
 
+import traceback
 from collections.abc import Callable, Iterable
+
+from ok import TaskDisabledException
 
 TaskItem = tuple[str, Callable[[], object]]
 # 可选的第三元素：开关谓词。提供时替代默认的 config.get(key) 判断（例如多开关 OR 逻辑）。
@@ -234,7 +237,29 @@ class DailyTaskRunner:
         self.final_summary["current_task"] = key
         self.task.log_info(self._tr("开始任务: {key}").format(key=self._tr(key)))
         self.task.ensure_main(**self.ensure_main_kwargs)
-        result = func()
+        try:
+            result = func()
+        except TaskDisabledException:
+            raise
+        except Exception as e:
+            # 一项任务出错不拖累后面的：记下原因和截图，回主页接着跑下一项
+            self.task.log_info(self._tr("任务 {key} 异常: {err}").format(key=self._tr(key), err=e), notify=True)
+            self.task.log_info(traceback.format_exc(), notify=False)
+            try:
+                self.task.screenshot(f"DailyTask_Exception_{key}")
+            except Exception:
+                pass
+            self.task_status["failed"].append(key)
+            self._record(key, "failed", self._tr("异常: {err}").format(err=e))
+            self.set_task_failure(self._tr("异常: {err}").format(err=e), task_name=key)
+            self.current_task_key = None
+            self.final_summary["current_task"] = ""
+            try:
+                self.task.ensure_main(**self.ensure_main_kwargs)
+            except Exception as e2:
+                self.task.log_info(f"异常后回主页也失败了: {e2}", notify=True)
+                raise
+            return False
 
         if result is False:
             self.task_status["failed"].append(key)
