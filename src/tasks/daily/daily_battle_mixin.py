@@ -224,8 +224,9 @@ class DailyBattleMixin:
             return
         self.click(end, after_sleep=1)
         assault_locked = False
-        # 每天 2 次（可花晶条买第 3 次）；多留一轮余量，防止次数读不准时死循环
-        for _ in range(4):
+        bought = False
+        # 每天 2 次（开了「尘烟买第3次」再花晶条买 1 次）；多留一轮余量，防止次数读不准时死循环
+        for _ in range(5):
             result = self.ocr(0.89, 0.01, 0.99, 0.1, match=stamina_re, box=self.box.top_right)
             if not result:
                 break
@@ -233,6 +234,9 @@ class DailyBattleMixin:
             self.log_info(f"chenyan tickets {tickets}")
             self.info_set("chenyan tickets", tickets)
             if tickets == 0:
+                if self.config.get("尘烟买第3次") and not bought and self._chenyan_buy_ticket():
+                    bought = True
+                    continue
                 break
             if not assault_locked:
                 self.wait_click_ocr(match="攻坚战", box=self.box.top_right, after_sleep=0.5, raise_if_not_found=True)
@@ -251,6 +255,33 @@ class DailyBattleMixin:
                 break
             self.sleep(2)
         self.back(after_sleep=2)
+
+    def _chenyan_buy_ticket(self):
+        """
+        右上角次数旁的「+」：弹「参战机会补充」，消耗 50 坍塌晶条换 1 次，「本日剩余1」。
+        剩余 0 或晶条不够就取消。返回是否买到。
+        """
+        self.click_relative(0.9715, 0.0444, after_sleep=1.5)
+        if not self.wait_ocr(match=re.compile("参战机会补充"), box=self.box.top, time_out=3):
+            self.log_info("尘烟：点了「+」没弹出参战机会补充")
+            return False
+        self.next_frame()
+        texts = [b.name for b in self.ocr(box=self.box.center)]
+        left = next((m.group(1) for t in texts if (m := re.search(r"本日剩余\s*(\d+)", t))), None)
+        self.log_info(f"尘烟参战机会补充: 本日剩余 {left} {texts[:6]}")
+        if left is None or left == "0" or any("不足" in t for t in texts):
+            self.wait_click_ocr(match=re.compile("^取消$"), box=self.box.bottom, time_out=3, after_sleep=1)
+            return False
+        if not self.wait_click_ocr(match=re.compile("^确认$"), box=self.box.bottom, time_out=3, after_sleep=2):
+            return False
+        # 晶条不够时游戏会再弹提示，点掉就算没买到
+        if self.ocr(match=re.compile("不足"), box=self.box.center):
+            self.log_info("尘烟：坍塌晶条不足，没买到")
+            self.wait_click_ocr(match=re.compile("^(取消|确认)$"), box=self.box.bottom, time_out=3, after_sleep=1)
+            return False
+        self.log_info("尘烟：花 50 坍塌晶条买了第 3 次", notify=True)
+        self.info_set("尘烟买第3次", "已买")
+        return True
 
     def chenyan_outpost(self):
         """

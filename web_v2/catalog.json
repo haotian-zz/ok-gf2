@@ -42,7 +42,7 @@
       {"id": "weekly", "label": "模拟作战：周常", "task": "WeeklyTask", "enable_key": null, "keys": "*", "lineup_scopes": ["扩编实练"], "doc": "首领挑战 / 峰值推定 / 扩编实练，单独作为「周常」任务运行。扩编实练进部署界面后按「扩编实练编队」切编队并补满。"}
     ]},
     {"id": "guild", "label": "班组", "icon": "🛡️", "desc": "主界面底栏「班组」。", "entries": [
-      {"id": "guild", "label": "要务作战 / 补给领取", "task": "DailyTask", "enable_key": "班组", "keys": ["尘烟"], "lineup_scopes": ["班组", "尘烟前哨战"], "doc": "要务开始作战后领补给。「尘烟」会去尘烟前线：前哨战有次数就打；攻坚战指挥官未到 60 级时自动跳过。"}
+      {"id": "guild", "label": "要务作战 / 补给领取", "task": "DailyTask", "enable_key": "班组", "keys": ["尘烟", "尘烟买第3次"], "lineup_scopes": ["班组", "尘烟前哨战"], "doc": "要务开始作战后领补给。「尘烟」会去尘烟前线：前哨战有次数就打；攻坚战指挥官未到 60 级时自动跳过。「尘烟买第3次」在免费次数用完后花 50 坍塌晶条再买一次。"}
     ]},
     {"id": "xunlu", "label": "巡录", "icon": "🧭", "desc": "主界面底栏「巡录」（远航巡录 / 大月卡）。", "entries": [
       {"id": "xunlu", "label": "远航巡录每日领取", "task": "DailyTask", "enable_key": "大月卡", "keys": ["拂晓之光补给包奖励"], "doc": "沿途行动 / 每日行动一键领取，补给包按选择的奖励领。"}
