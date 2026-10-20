@@ -75,6 +75,10 @@ MAX_CONTINUE_STREAK = 8  # 连续点「继续前进」却没进入战斗的次�
 WATCHDOG_TIMEOUT = 120  # 秒：这么久没有任何进展（没点击、没日志、没换阶段）看门狗就截图报警
 WATCHDOG_KILL_LEVEL = 2  # 停滞达到 WATCHDOG_TIMEOUT 的这个倍数、而且不是人为暂停，就自动停止任务
 TAB_FALLBACK_XY = {"我的人形": (0.815, 0.039), "好友助战": (0.902, 0.039)}  # 页签 OCR 偶尔漏读时按固定位置点
+# 游戏启动后的「资源更新完毕，需要重新启动游戏」提示框（实录 2026-10-20，游戏热更新当天第一次启动）
+restart_required_re = re.compile(r"重新启动游戏|重启游戏|需要重启")
+GAME_RESTART_TITLE_TIMEOUT = 120  # 秒：重新拉起游戏后等标题页「点击开始」的时间（实机：启动到标题约 50 秒）
+GAME_EXIT_TIMEOUT = 20  # 秒：点「确认」后等游戏自己退出的时间，超过就直接结束进程
 
 
 def box_center(box):
@@ -412,9 +416,15 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         deadline = time.time() + time_out
         hard_deadline = deadline + loading_grace
         extended = False
+        self._deadline_bump = 0
         while True:
             if self.is_main(recheck_time=recheck_time, esc=esc):
                 return True
+            if self._deadline_bump:
+                # is_main 里刚重启过游戏，从现在起重新计时
+                deadline = time.time() + max(time_out, self._deadline_bump)
+                hard_deadline = deadline + loading_grace
+                self._deadline_bump = 0
             now = time.time()
             if now >= deadline:
                 self.next_frame()
@@ -1462,6 +1472,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if total >= 2:
             self._cancel_streak = 0
             return True
+        if self._handle_restart_required():
+            return False
         # if not self.do_handle_alert()[0]:
         if self.ocr(match=re.compile("^是否离开活动层"), box=self.box.center, log=True):
             # 实录：读到了「是否离开活动层」却 10 秒都找不到确认按钮，连续 5 轮把回主页的时间耗光；缩短等待，找不到就走下面的 ESC
@@ -2182,6 +2194,61 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 i -= 1
             # 否则：留在当前步，下一轮重试（因 i 未变）
 
+        return True
+
+    # ------------------------------------------------------------------ 游戏要求重启
+    def _game_exe_names(self):
+        cfg = getattr(getattr(self, "_app", None), "config", None) or {}
+        exes = (cfg.get("windows") or {}).get("exe") or ["GF2_Exilium.exe"]
+        if isinstance(exes, str):
+            exes = [exes]
+        return {e.lower() for e in exes}
+
+    def _game_processes(self):
+        import psutil
+
+        names = self._game_exe_names()
+        return [p for p in psutil.process_iter(["name"]) if (p.info.get("name") or "").lower() in names]
+
+    def _wait_game_exit(self, timeout):
+        end = time.time() + timeout
+        while time.time() < end:
+            if not self._game_processes():
+                return True
+            self.sleep(1)
+        return not self._game_processes()
+
+    def _relaunch_game(self):
+        """让框架重新拉起游戏：先刷新设备状态（窗口没了 → 未连接），start_device 才会去执行 exe 并等窗口就绪。"""
+        from ok import og
+
+        og.device_manager.do_refresh(True)
+        self.log_info("重新启动游戏", notify=False)
+        self.start_device()
+        self.next_frame()
+
+    def _handle_restart_required(self):
+        """
+        实录 2026-10-20：游戏热更新当天第一次启动，标题页前弹「资源更新完毕，需要重新启动游戏」，只有一个「确认」，
+        点了游戏自己退出；不处理的话脚本会在这个框前面按 ESC 直到回主页超时。
+        这里点确认 → 等游戏退出（超时就结束进程）→ 框架重新拉起 → 把回主页的超时顺延，交回 is_main 去点「点击开始」。
+        """
+        if not self.ocr(box=self.box.center, match=restart_required_re, log=True):
+            return False
+        self.log_info("游戏提示资源更新完毕、需要重新启动，点确认后重新拉起游戏", notify=True)
+        self.debug_shot("restart_required")
+        if confirm := self.ocr(box=self.box.bottom, match=re.compile(r"^确认$")):
+            self.click(confirm, after_sleep=3)
+        if not self._wait_game_exit(GAME_EXIT_TIMEOUT):
+            self.log_info(f"点确认后 {GAME_EXIT_TIMEOUT} 秒游戏还没退出，直接结束游戏进程", notify=False)
+            for proc in self._game_processes():
+                try:
+                    proc.kill()
+                except Exception as e:
+                    self.log_info(f"结束游戏进程失败: {e}", notify=False)
+            self._wait_game_exit(10)
+        self._relaunch_game()
+        self._deadline_bump = GAME_RESTART_TITLE_TIMEOUT
         return True
 
     def kill_all_related_processes(self):
