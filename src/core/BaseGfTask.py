@@ -1479,6 +1479,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                         return False
             self.click(box, after_sleep=2)
             return False
+        # 停在战斗部署界面时 ESC 只会弹出/关掉关卡信息菜单，回不去；菜单里有「退出作战」就点它（后面的确认框走上面的离开确认）
+        if quit_box := self.ocr(box=self.box.bottom_left, match=re.compile("^退出作战$")):
+            if self.ocr(box=self.box.bottom_right, match=re.compile("^继续作战$")):
+                self.log_info("在战斗菜单里，点「退出作战」", notify=False)
+                self.click(quit_box, after_sleep=2)
+                return False
         if esc:
             if result := self.find_feature(
                 feature=[fL.back_home, fL.back_home_light], horizontal_variance=0.02, vertical_variance=0.002
