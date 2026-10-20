@@ -161,6 +161,7 @@ class DailyActivityMixin:
                         second_btn="确认",
                         skip_end_match=["饮品加成"],
                         need_extra_confirm=False,
+                        done_match=re.compile("今日已饮用"),
                     )
                     if drink_result == "done":
                         self.log_info("今天已经喝过了，跳过喝水", notify=False)
@@ -366,8 +367,12 @@ class DailyActivityMixin:
         skip_end_match,
         need_extra_confirm=False,
         need_again_test=False,
+        done_match=None,
     ):
-        """返回 True 表示流程完成；失败时返回 'entry'、'button' 或 'confirm' 表示失败阶段。"""
+        """
+        返回 True 表示流程完成；'done' 表示今天已经做过（已跳过）；失败时返回 'entry'、'button' 或 'confirm' 表示失败阶段。
+        done_match：进到界面后右下角出现这个字样（如喝水的「今日已饮用」）就说明今天做过了，直接退出。
+        """
         enter_func(after_sleep=1)
         times = 1
         if need_again_test:
@@ -377,6 +382,14 @@ class DailyActivityMixin:
                 self.click_with_key("alt", result)
             else:
                 return "entry"
+            if done_match is not None and self.wait_ocr(
+                match=done_match, box=self.box.bottom_right, time_out=3, raise_if_not_found=False, log=True
+            ):
+                # 实录截图 tests/fixtures/drink_already_done_1280x768.jpg：右下角按钮变成「今日已饮用」
+                self.log_info(f"右下角显示「{done_match.pattern}」，今天已经做过，退出", notify=True)
+                self.screenshot("food_already_done")
+                self.back(after_sleep=2)
+                return "done"
             if self.wait_click_ocr(match=main_btn, box=self.box.bottom_right, time_out=10):
                 if self._dismiss_already_active(entry_match.pattern):
                     return "done"

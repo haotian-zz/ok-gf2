@@ -17,6 +17,7 @@ from src.tasks.daily.daily_public_mixin import DailyPublicMixin
 from src.tasks.daily.daily_reward_mixin import DailyRewardMixin
 from src.tasks.daily_summary import create_task_summary_report, open_local_path_with_default_app
 from src.tasks.DailyTaskRunner import DailyTaskRunner
+from src.tasks.daily.daily_record import DailyRecord
 
 
 class DailyTask(
@@ -199,7 +200,18 @@ class DailyTask(
         if not self.config.get("已确认启用游戏内全局自动功能"):
             self.confirm_auto_battle_up()
         try:
-            self.daily_runner = DailyTaskRunner(self, self.build_task_plan())
+            record = None
+            try:
+                record = DailyRecord()
+                done = record.done_tasks(str(getattr(self, "current_account_id", "") or ""))
+                if done:
+                    self.log_info(f"今天已经完成过的任务（直接跳过）: {done}", notify=True)
+                failed = record.failed_tasks(str(getattr(self, "current_account_id", "") or ""))
+                if failed:
+                    self.log_info(f"今天失败过、这次重试的任务: {failed}", notify=True)
+            except Exception as e:
+                self.log_info(f"读日常记录失败，这次不跳过任何任务: {e}")
+            self.daily_runner = DailyTaskRunner(self, self.build_task_plan(), record=record)
             self.daily_runner.run()
         finally:
             # 无论正常结束还是异常中断，都尝试落地汇总，便于事后排查
