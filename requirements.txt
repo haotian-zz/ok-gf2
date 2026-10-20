@@ -122,3 +122,4 @@ urllib3==2.7.0
     # via requests
 websockets==17.1
     # via ok-gf2
+pywebview  # 新版界面 tools/app_v2.py 的原生窗口

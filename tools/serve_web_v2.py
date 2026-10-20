@@ -5,6 +5,7 @@
     .venv\\Scripts\\python.exe tools\\serve_web_v2.py --port 8800
 
 浏览器打开 http://127.0.0.1:8765/v2/ 看新版，http://127.0.0.1:8765/ 看旧版。
+要以 Windows 窗口方式打开新版，用 tools/app_v2.py（或 run_v2.bat）。
 两个页面共用同一套 /api 接口（任务、配置、全局设置、日志、截图、事件推送），互不影响。
 Web 模式和桌面版（main.py）不能同时运行。
 """
@@ -17,11 +18,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_V2_DIR = os.path.join(ROOT, "web_v2")
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
-    args = parser.parse_args()
+def build_app():
+    """建好带 /v2 的 FastAPI 应用，返回 (app, uvicorn 模块)。"""
     os.chdir(ROOT)
     if ROOT not in sys.path:
         sys.path.insert(0, ROOT)
@@ -44,8 +42,16 @@ def main():
         return FileResponse(os.path.join(WEB_V2_DIR, "index.html"))
 
     app.mount("/v2", StaticFiles(directory=WEB_V2_DIR), name="web_v2")
-
     _configure_server_logging()
+    return app, uvicorn
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args()
+    app, uvicorn = build_app()
     server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, log_config=None))
     print(f"ok-gf2 web: old UI http://{args.host}:{args.port}/  new UI http://{args.host}:{args.port}/v2/", flush=True)
     server.run()
