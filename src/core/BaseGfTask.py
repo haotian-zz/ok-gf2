@@ -1975,7 +1975,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
         self.click(find_boxes_by_name(boxes, "确认"), after_sleep=2)
 
-        if self.click(find_boxes_by_name(boxes, "前往"), after_sleep=2):
+        # 「前往」只在背包满了弹「去分解」时才有；没有就别把 None 传给 click（会刷一条 click_box box is None 的 ERROR）
+        if (go := find_boxes_by_name(boxes, "前往")) and self.click(go, after_sleep=2):
             if self.enter_fast_disassemble():
                 self.fast_disassemble_loop(stamina_re)
 
