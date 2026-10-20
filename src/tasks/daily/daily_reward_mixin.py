@@ -53,9 +53,15 @@ class DailyRewardMixin:
         self.info_set("巡录奖励", "未检查")
         box = self.wait_ocr(match=[re.compile(r"^巡录$")], box=self.box._xunlun, time_out=3, raise_if_not_found=False)
         if not box:
-            self.log_info("未找到「巡录」入口，跳过")
+            # 实录：小框 OCR 偶尔读不出底栏的「巡录」，整帧 OCR 能读到（688,716），再用整个底部找一次
+            self.next_frame()
+            box = self.ocr(match=[re.compile(r"^巡录$")], box=self.box.bottom)
+        if not box:
+            self.log_info("主页底栏没找到「巡录」入口，跳过大月卡", notify=True)
+            self.screenshot("xunlu_entry_missing")
+            self.info_set("巡录", "没找到入口，跳过")
             self.ensure_main()
-            return False
+            return True
         self.click_box_by_match_position(box, "巡录", after_sleep=2)
         # 预览页入口是可选的；通行证奖励页并不是每日行动页。
         if self.wait_click_ocr(
@@ -249,11 +255,17 @@ class DailyRewardMixin:
             match=re.compile("边界推进"),
             box=self.box.top_right,
             after_sleep=6,
-            time_out=2,
-            raise_if_not_found=True,
+            time_out=3,
+            raise_if_not_found=False,
             log=True,
         ):
-            return
+            # 实录：限时开启页右侧只有「危区探遗 / 遗珍回收」，没有边界推进（未开放），不算失败
+            texts = [b.name for b in self.ocr(box=self.box.right)]
+            self.log_info(f"限时开启页没有「边界推进」，探索领取跳过；右侧现有: {texts[:8]}", notify=True)
+            self.info_set("探索领取", "没有边界推进入口，跳过")
+            self.screenshot("explore_no_entry")
+            self.ensure_main()
+            return True
         if not self.wait_click_ocr(
             match=re.compile("采集"),
             box=self.box.bottom_right,

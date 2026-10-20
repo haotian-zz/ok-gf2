@@ -227,6 +227,12 @@ class DailyBattleMixin:
             if tickets == 0:
                 break
             self.wait_click_ocr(match="攻坚战", box=self.box.top_right, after_sleep=0.5, raise_if_not_found=True)
+            self.next_frame()
+            if locked := self.ocr(match=re.compile("解锁"), box=self.box.bottom_right):
+                # 实录：指挥官 41 级时右下角按钮是「指挥官60级后解锁」，尘烟打不了，不算失败
+                self.log_info(f"尘烟攻坚战还没解锁（{locked[0].name}），跳过", notify=True)
+                self.info_set("尘烟", f"未解锁：{locked[0].name}")
+                break
             self.wait_click_ocr(match="开始作战", box=self.box.bottom_right, after_sleep=2, raise_if_not_found=True)
             self.choose_chenyan(tickets)
             self.sleep(2)
