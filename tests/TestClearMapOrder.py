@@ -293,13 +293,20 @@ class TestZilvLocked(unittest.TestCase):
 
 
 class TestDailyRecord(unittest.TestCase):
-    def test_game_day_resets_at_4am(self):
-        from datetime import datetime
+    def test_game_day_resets_at_5am_beijing(self):
+        from datetime import datetime, timedelta, timezone
 
-        from src.tasks.daily.daily_record import game_day
+        from src.tasks.daily.daily_record import RESET_TZ, game_day
 
-        self.assertEqual(game_day(datetime(2026, 10, 19, 3, 59)), "2026-10-18")
-        self.assertEqual(game_day(datetime(2026, 10, 19, 4, 0)), "2026-10-19")
+        self.assertEqual(game_day(datetime(2026, 10, 19, 4, 59, tzinfo=RESET_TZ)), "2026-10-18")
+        self.assertEqual(game_day(datetime(2026, 10, 19, 5, 0, tzinfo=RESET_TZ)), "2026-10-19")
+        # 其它时区的时间先换算到北京时间：UTC 20:59 = 北京次日 04:59，仍算前一天
+        utc = timezone.utc
+        self.assertEqual(game_day(datetime(2026, 10, 18, 20, 59, tzinfo=utc)), "2026-10-18")
+        self.assertEqual(game_day(datetime(2026, 10, 18, 21, 0, tzinfo=utc)), "2026-10-19")
+        # naive 时间按本机时区理解，结果和显式标本机时区一致
+        local = datetime(2026, 10, 19, 12, 0)
+        self.assertEqual(game_day(local), game_day(local.astimezone()))
 
     def test_record_roundtrip_and_reset(self):
         from datetime import datetime

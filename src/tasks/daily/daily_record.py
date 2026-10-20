@@ -1,7 +1,7 @@
 """
 每天一份的日常任务记录（configs/daily_record.json）。
 
-- 以游戏日为准（国服每天 04:00 重置），跨天自动清空。
+- 以游戏日为准（国服每天北京时间 05:00 重置），跨天自动清空。
 - 成功的任务记下来，再跑一键日常时直接跳过，不重复执行。
 - 失败/待核查的任务记下失败原因，下次只重试这些；重试成功就把失败记录删掉。
 - 多账户按 account_id 分开记。
@@ -11,15 +11,19 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-RESET_HOUR = 4  # 国服日常 04:00 重置
+RESET_HOUR = 5  # 国服日常每天 05:00 重置（北京时间）
+RESET_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")  # 北京时间没有夏令时，固定 +8 即可，不依赖 tzdata
 DEFAULT_PATH = os.path.join("configs", "daily_record.json")
 
 
 def game_day(now: datetime | None = None) -> str:
-    """游戏日：凌晨 4 点前算前一天。"""
+    """游戏日：北京时间凌晨 5 点前算前一天。naive 的 now 按本机时区理解，再换算到北京时间。"""
     now = now or datetime.now()
+    if now.tzinfo is None:
+        now = now.astimezone()
+    now = now.astimezone(RESET_TZ)
     return (now - timedelta(hours=RESET_HOUR)).strftime("%Y-%m-%d")
 
 
