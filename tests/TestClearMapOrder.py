@@ -247,6 +247,18 @@ class TestStaminaPopup(unittest.TestCase):
         self.assertIsNone(tab_count(boxes, 488, 323, self.h))
 
 
+class TestLoadingFrame(unittest.TestCase):
+    def test_elmo_transition_is_loading(self):
+        # 实录：离开活动层的「艾莫号」过场有一大段介绍文字，之前因为文字多于 3 条被当成非加载页
+        names = ["艾莫号是指挥官所拥有的陆地行动单元，结构复杂", "NOW LOADING.", "移动中...69%", "ELMO", "TIME"]
+        boxes = [Box(10, 10 + i * 30, 100, 20, name=n) for i, n in enumerate(names)]
+        self.assertTrue(BaseGfTask._is_loading_frame(None, boxes))
+        self.assertTrue(BaseGfTask._is_loading_frame(None, [Box(0, 0, 10, 10, name="资源加载中")]))
+        self.assertTrue(BaseGfTask._is_loading_frame(None, []))
+        tutorial = [Box(0, 0, 10, 10, name=n) for n in ["60%", "25%", "伤害", "关闭", "技能说明"]]
+        self.assertFalse(BaseGfTask._is_loading_frame(None, tutorial))
+
+
 class TestWatchdog(unittest.TestCase):
     def test_message_distinguishes_pause_from_stall(self):
         # 实录：推图卡片的「暂停」按钮被点到，执行线程在 ok-script 的 sleep 里空转 6 分钟，界面上还显示「运行中」

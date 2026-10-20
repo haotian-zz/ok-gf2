@@ -357,10 +357,30 @@ class BaseGfTask(RuntimeMixin, BaseTask):
     def get_role_by_name(self, name):
         return next((k for k, v in self.roles_dict.items() if name in v), None)
 
-    def ensure_main(self, recheck_time=1, time_out=30, esc=True):
+    def ensure_main(self, recheck_time=1, time_out=30, esc=True, loading_grace=120):
+        """
+        回到主页。超时后如果画面还是加载页（NOW LOADING / 移动中 / 资源加载中），超时顺延，
+        最多多等 loading_grace 秒（实录：离开活动层的「艾莫号 移动中…69%」加载页把 60 秒耗光，任务被判失败）。
+        """
         self.info_set("current_task", "go_to_main")
-        if not self.wait_until(lambda: self.is_main(recheck_time=recheck_time, esc=esc), time_out=time_out):
-            raise Exception("请从游戏主页进入")
+        deadline = time.time() + time_out
+        hard_deadline = deadline + loading_grace
+        extended = False
+        while True:
+            if self.is_main(recheck_time=recheck_time, esc=esc):
+                return True
+            now = time.time()
+            if now >= deadline:
+                self.next_frame()
+                if now < hard_deadline and self._is_loading_frame(self.ocr()):
+                    if not extended:
+                        self.log_info("画面还在加载中（移动中/资源加载中），回主页的超时顺延", notify=False)
+                        extended = True
+                    deadline = now + 10
+                else:
+                    self.debug_shot("ensure_main_timeout")
+                    raise Exception("请从游戏主页进入")
+            self.sleep(recheck_time)
 
     def skip_dialogs(self, end_match, end_box=None, time_out=120, has_dialog=True, raise_if_not_found=True):
         self.info_set("current_task", "skip_dialogs")
@@ -1112,6 +1132,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         names = [box.name for box in boxes if box.name]
         if any("资源加载中" in name for name in names):
             return True
+        # 离开活动层时的「艾莫号」过场：NOW LOADING / 移动中…69%，文字很多但就是加载页
+        if any(re.search(r"移动中|NOW\s*LOADING|LOADING\.{0,3}$", name, re.I) for name in names):
+            return True
         # 只有一个进度百分比、几乎没有别的文字时才算加载页；
         # 教学弹窗里的「60% 25% 60% 20%」这类伤害数值不能当成加载页，否则会一直不点关闭
         has_progress = any(re.fullmatch(r"\s*\d{1,3}%\s*", name) for name in names)
@@ -1356,8 +1379,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             return True
         # if not self.do_handle_alert()[0]:
         if self.ocr(match=re.compile("^是否离开活动层"), box=self.box.center, log=True):
-            self.wait_click_ocr(match="确认", after_sleep=2, box=self.box.bottom_right)
-            return False
+            # 实录：读到了「是否离开活动层」却 10 秒都找不到确认按钮，连续 5 轮把回主页的时间耗光；缩短等待，找不到就走下面的 ESC
+            if self.wait_click_ocr(match="确认", after_sleep=2, box=self.box.bottom_right, time_out=3):
+                return False
         if box := self.ocr(box=self.box.bottom, match=["点击开始", "点击空白处关闭", "取消"], log=True):
             self.click(box, after_sleep=2)
             return False

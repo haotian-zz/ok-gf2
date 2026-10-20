@@ -56,6 +56,8 @@ class DailyActivityMixin:
                 return True
             if page < 7:
                 self._scroll_supply_menu(-3)
+        # 留一张活动列表的图，方便核对当前活动页到底有没有这个入口
+        self.screenshot(f"supply_not_found_{reward_activity}")
         return False
 
     def _scroll_supply_menu(self, count):
