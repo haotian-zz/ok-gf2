@@ -160,6 +160,36 @@ def parse_deploy_count(text):
     return (n, total) if total >= n else None
 
 
+
+ZILV_GRAY_GAP = 25  # 自律按钮比同一帧的挑战按钮暗这么多（灰度均值）就当它是灰色未解锁
+
+
+def region_mean_gray(frame, box):
+    """frame(BGR ndarray) 里 box 范围的灰度均值；frame 为空或 box 越界返回 None。"""
+    if frame is None or box is None:
+        return None
+    h, w = frame.shape[:2]
+    x0, y0 = max(0, int(box.x)), max(0, int(box.y))
+    x1, y1 = min(w, int(box.x + box.width)), min(h, int(box.y + box.height))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    region = frame[y0:y1, x0:x1]
+    if region.ndim == 3:
+        region = region.mean(axis=2)
+    return float(region.mean())
+
+
+def zilv_locked(zilv_gray, challenge_gray, gap=ZILV_GRAY_GAP):
+    """
+    自律按钮是否灰色（未解锁）。用同一帧里「挑战」按钮做参照，整体亮度变化（遮罩/截图偏暗）不影响判断。
+    实录 tests/fixtures/zilv_locked_1280x768.png：灰自律 ≈135，白挑战 ≈177。
+    任一值缺失返回 None（不知道）。
+    """
+    if zilv_gray is None or challenge_gray is None:
+        return None
+    return challenge_gray - zilv_gray >= gap
+
+
 class BaseGfTask(RuntimeMixin, BaseTask):
     """任务基类：RuntimeMixin 提供模板匹配入口重写，BaseTask 提供框架能力。"""
 
@@ -435,6 +465,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 self.sleep(1)
             else:
                 # 战斗中界面右上角是加速/跳过回合图标，不是剧情跳过，不能点
+                if self._is_battle_frame(boxes) or self._is_loading_frame(boxes):
+                    # 游戏在打/在加载，不算卡住，喂一下看门狗
+                    self._touch_progress()
                 if has_dialog and not self._is_loading_frame(boxes) and not self._is_battle_frame(boxes):
                     # 剧情跳过标签在 (0.95, 0.04)，教学弹窗的关闭 X 在 (0.967, 0.042)，交替点两处
                     if attempts % 2 == 0:
@@ -1792,6 +1825,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.back_if_not_ocr_match(match=["自律"], box=self.box.bottom_right, raise_if_not_found=True)
             return 0
 
+        if self._zilv_locked:
+            # 这一轮任务里已经确认过自律是灰的，不再每次都点一下白等
+            return self._manual_stamina_battle(set_cost)
         self.wait_click_ocr(match=["自律"], box=self.box.bottom_right, after_sleep=2, raise_if_not_found=True)
         if self.break_if_not_enough():
             self.wait_ocr(match=["自律"], box=self.box.bottom_right, raise_if_not_found=True)
@@ -1811,10 +1847,16 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             len(find_boxes_by_name(boxes, ["确认", "取消", "上一步"])) != 2
             and len(find_boxes_by_name(boxes, ["确认", "取消", "上", "一步"])) != 3
         ):
-            if self.debug:
-                self.screenshot("fast_no_zilv")
-            self.log_info("自律没有弹窗, 可能是调度权限不足")
-            return current
+            self.debug_shot("fast_no_zilv", boxes)
+            locked = self._zilv_button_locked()
+            if locked:
+                self.log_info("自律按钮是灰色的（还没解锁自律），改为直接点「挑战」手动打", notify=True)
+            elif locked is None:
+                self.log_info("点了自律没弹窗，也没找到自律/挑战按钮对比颜色，改为直接点「挑战」手动打", notify=True)
+            else:
+                self.log_info("点了自律没弹窗（按钮不是灰的，可能调度权限不足），改为直接点「挑战」手动打", notify=True)
+            self._zilv_locked = True
+            return self._manual_stamina_battle(set_cost, current)
         cost = set_cost
         # if set_cost:
         #     cost = set_cost
@@ -1851,6 +1893,53 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.wait_pop_up(count=1)
         self.wait_ocr(match=["自律"], box=self.box.bottom_right, raise_if_not_found=True)
 
+        return remaining
+
+    _zilv_locked = False  # 本次任务里自律按钮灰色/点了没反应；DailyTask.run 开头置回 False
+
+    def _zilv_button_locked(self):
+        """
+        看当前帧右下角：「自律」按钮比「挑战」按钮暗很多就是灰色未解锁。
+        返回 True/False，找不到两个按钮返回 None。
+        """
+        self.next_frame()
+        boxes = self.ocr(box=self.box.bottom_right)
+        zilv = self.find_boxes(boxes, match="自律")
+        challenge = self.find_boxes(boxes, match=challenge_button_re)
+        if not zilv or not challenge:
+            return None
+        zg = region_mean_gray(self.frame, zilv[0])
+        cg = region_mean_gray(self.frame, challenge[0])
+        self.log_info(f"自律按钮灰度 {zg and round(zg)}，挑战按钮灰度 {cg and round(cg)}", notify=False)
+        return zilv_locked(zg, cg)
+
+    def _read_stamina(self, default=None):
+        boxes = self.ocr(box=self.box_of_screen(0.84, 0, 0.99, 0.10), match=[stamina_re, number_re])
+        if boxes:
+            return int(boxes[0].name.split("/")[0])
+        return default
+
+    def _manual_stamina_battle(self, set_cost, current=None):
+        """
+        自律不可用时点「挑战」手动打一场，打完回到选关面板，返回剩余体力。
+        """
+        if current is None:
+            current = self._read_stamina(default=set_cost)
+        if current < set_cost:
+            self.log_info(f"体力 {current} 不够一场（{set_cost}），不再手动挑战", notify=False)
+            return current
+        self.log_info(f"手动挑战：体力 {current}，本场消耗 {set_cost}", notify=True)
+        if not self.wait_click_ocr(
+            match=challenge_button_re, box=self.box.bottom_right, time_out=5, after_sleep=2, raise_if_not_found=False
+        ):
+            self.debug_shot("manual_challenge_missing")
+            raise Exception("自律不可用，但选关面板上也没找到「挑战」按钮")
+        self.auto_battle(end_match=["自律", "挑战"], end_box=self.box.bottom_right)
+        self.sleep(1)
+        self.next_frame()
+        remaining = self._read_stamina(default=current - set_cost)
+        self.info_set("remaining_stamina", remaining)
+        self.info_incr("手动挑战次数")
         return remaining
 
     def click_box_by_match_position(self, box: Box | list[Box], match: str | re.Pattern, after_sleep=None):

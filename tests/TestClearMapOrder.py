@@ -247,6 +247,30 @@ class TestStaminaPopup(unittest.TestCase):
         self.assertIsNone(tab_count(boxes, 488, 323, self.h))
 
 
+class TestZilvLocked(unittest.TestCase):
+    def test_gray_gap_rule(self):
+        from src.core.BaseGfTask import zilv_locked
+
+        self.assertTrue(zilv_locked(135, 177))  # 实录：灰自律 vs 白挑战
+        self.assertFalse(zilv_locked(175, 177))  # 两个都是白的
+        self.assertFalse(zilv_locked(120, 130))  # 整体偏暗但差不多亮
+        self.assertIsNone(zilv_locked(None, 177))
+
+    def test_real_screenshot(self):
+        import cv2
+
+        from ok import Box
+
+        from src.core.BaseGfTask import region_mean_gray, zilv_locked
+
+        frame = cv2.imread(str(Path(__file__).resolve().parent / "fixtures" / "zilv_locked_1280x768.png"))
+        self.assertIsNotNone(frame)
+        zilv = region_mean_gray(frame, Box(932, 692, 95, 45))
+        challenge = region_mean_gray(frame, Box(1040, 692, 188, 45))
+        self.assertTrue(zilv_locked(zilv, challenge), (zilv, challenge))
+        self.assertFalse(zilv_locked(challenge, challenge))
+
+
 class TestDailyRecord(unittest.TestCase):
     def test_game_day_resets_at_4am(self):
         from datetime import datetime
