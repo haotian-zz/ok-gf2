@@ -1916,6 +1916,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         zg = region_mean_gray(self.frame, zilv[0])
         cg = region_mean_gray(self.frame, challenge[0])
         self.log_info(f"自律按钮灰度 {zg and round(zg)}，挑战按钮灰度 {cg and round(cg)}", notify=False)
+        if cg is not None and cg < 90:
+            # 整个画面被压暗了（弹窗/过渡），这帧比不出来
+            return None
         return zilv_locked(zg, cg)
 
     def _read_stamina(self, default=None):
@@ -1939,12 +1942,23 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.log_info(f"体力 {current} 不够一场（{set_cost}），不再手动挑战", notify=False)
             return current
         self.log_info(f"手动挑战：体力 {current}，本场消耗 {set_cost}", notify=True)
-        if not self.wait_click_ocr(
-            match=challenge_button_re, box=self.box.bottom_right, time_out=5, after_sleep=2, raise_if_not_found=False
-        ):
-            self.debug_shot("manual_challenge_missing")
-            raise Exception("自律不可用，但选关面板上也没找到「挑战」按钮")
-        if pop := self.wait_ocr(match=stamina_popup_re, time_out=2, raise_if_not_found=False):
+        pop = None
+        for attempt in range(3):
+            # 实录：点自律后画面会暗一下（灰度 55），这时点「挑战」没反应；点完没离开面板就再点
+            if not self.wait_click_ocr(
+                match=challenge_button_re, box=self.box.bottom_right, time_out=5, after_sleep=2, raise_if_not_found=False
+            ):
+                self.debug_shot("manual_challenge_missing")
+                raise Exception("自律不可用，但选关面板上也没找到「挑战」按钮")
+            pop = self.wait_ocr(match=stamina_popup_re, time_out=2, raise_if_not_found=False)
+            if pop:
+                break
+            self.next_frame()
+            if not self.ocr(match=challenge_button_re, box=self.box.bottom_right):
+                break
+            self.log_info(f"点了「挑战」还在选关面板，再点一次（第 {attempt + 1} 次）", notify=False)
+            self.sleep(1)
+        if pop:
             # 体力读错了也不怕：真不够会弹「情报拼图补充」。全局「体力」开了自动用药就恢复后再点挑战，没开就当刷完
             if self.auto_potion_enabled() and self.restore_stamina(pop[0]):
                 self.log_info("体力不足，已用体力药恢复，重新点「挑战」", notify=True)
