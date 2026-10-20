@@ -1,7 +1,7 @@
-/** 「添加」面板（沿用 MXU AddTaskPanel）：搜索 + 按游戏板块分组的块按钮，点一下加进当前流程。 */
+/** 「添加」面板（沿用 MXU AddTaskPanel）：搜索 + 按游戏板块分组的块按钮，点一下加进当前流程，已加的再点一下移出。 */
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { Check, Plus, Search, X } from 'lucide-react';
+import { Check, Minus, Plus, Search, X } from 'lucide-react';
 import { allGroups, currentWorkflow, useStore } from '@/store';
 import { Tooltip } from './ui/Tooltip';
 
@@ -12,6 +12,7 @@ export function AddComponentPanel() {
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
   const addItem = useStore((s) => s.addItem);
+  const removeItem = useStore((s) => s.removeItem);
   const status = useStore((s) => s.status);
   const [query, setQuery] = useState('');
   const wf = currentWorkflow({ workflows, prefs });
@@ -31,7 +32,7 @@ export function AddComponentPanel() {
   }, [catalog, tasks, query]);
 
   if (!catalog || !wf) return null;
-  const inWorkflow = new Set(wf.items.map((i) => i.component));
+  const inWorkflow = new Map(wf.items.map((i) => [i.component, i.uid] as const));
 
   return (
     <div className="border-t border-border bg-bg-primary flex flex-col max-h-[45vh]">
@@ -46,7 +47,7 @@ export function AddComponentPanel() {
             className="w-full pl-7 pr-2 py-1 text-xs rounded-md bg-bg-secondary border border-border focus:border-accent outline-none text-text-primary placeholder:text-text-muted"
           />
         </div>
-        <span className="text-[11px] text-text-muted hidden md:inline">同一块在一个流程里只能有一份；每块的设置只属于当前流程</span>
+        <span className="text-[11px] text-text-muted hidden md:inline">点一下加进来，再点一下移出；每块的设置只属于当前流程</span>
         <button
           type="button"
           onClick={() => setPrefs({ showAddPanel: false })}
@@ -67,24 +68,35 @@ export function AddComponentPanel() {
             </div>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,13rem),1fr))] gap-2">
               {g.components.map((c) => {
-                const added = inWorkflow.has(c.id);
+                const uid = inWorkflow.get(c.id);
+                const added = uid !== undefined;
                 const task = tasks.find((t) => t.class_name === c.task);
-                const tip = [c.doc, !task ? '任务类未注册' : null, added ? '已经在这个流程里' : null].filter(Boolean).join('\n');
+                const tip = [c.doc, !task ? '任务类未注册' : null, added ? '已在这个流程里，再点一下移出' : null].filter(Boolean).join('\n');
                 return (
                   <Tooltip key={c.id} content={tip || null} side="top">
                     <button
                       type="button"
-                      disabled={added || running}
-                      onClick={() => addItem(c.id)}
+                      disabled={running}
+                      onClick={() => (added ? removeItem(uid) : addItem(c.id))}
                       className={clsx(
-                        'relative flex min-w-0 items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors text-left',
-                        added || running
-                          ? 'bg-bg-secondary/50 text-text-muted border border-border/50 cursor-not-allowed opacity-70'
-                          : 'bg-bg-secondary hover:bg-bg-hover text-text-primary border border-border hover:border-accent',
+                        'group/add relative flex min-w-0 items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors text-left border',
+                        running && 'cursor-not-allowed opacity-70',
+                        added
+                          ? 'bg-accent/10 border-accent/60 text-text-primary hover:bg-error/10 hover:border-error/60'
+                          : 'bg-bg-secondary hover:bg-bg-hover text-text-primary border-border hover:border-accent',
                       )}
                     >
-                      {added ? <Check className="w-4 h-4 shrink-0 text-success" /> : <Plus className="w-4 h-4 shrink-0 text-accent" />}
+                      {added ? (
+                        <span className="relative w-4 h-4 shrink-0">
+                          <Check className="absolute inset-0 w-4 h-4 text-accent group-hover/add:opacity-0 transition-opacity" />
+                          <Minus className="absolute inset-0 w-4 h-4 text-error opacity-0 group-hover/add:opacity-100 transition-opacity" />
+                        </span>
+                      ) : (
+                        <Plus className="w-4 h-4 shrink-0 text-accent" />
+                      )}
                       <span className="min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]">{c.label}</span>
+                      {added && <span className="shrink-0 text-[10px] text-text-muted group-hover/add:hidden">已加入</span>}
+                      {added && <span className="shrink-0 text-[10px] text-error hidden group-hover/add:inline">移出</span>}
                       {!task && <span className="shrink-0 px-1.5 py-0.5 text-[10px] rounded bg-warning/10 text-warning">未注册</span>}
                     </button>
                   </Tooltip>

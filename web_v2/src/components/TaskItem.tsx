@@ -179,7 +179,7 @@ export function TaskItem({
                   removeItem(item.uid);
                 }}
                 disabled={executorRunning}
-                className="p-1 rounded opacity-0 group-hover:opacity-100 text-text-muted hover:text-error hover:bg-error/10 transition-all disabled:opacity-0"
+                className="p-1 rounded text-text-muted/70 hover:text-error hover:bg-error/10 transition-colors disabled:opacity-30 disabled:hover:text-text-muted/70 disabled:hover:bg-transparent"
                 title="从这个流程移出"
               >
                 <Trash2 className="w-3.5 h-3.5" />
