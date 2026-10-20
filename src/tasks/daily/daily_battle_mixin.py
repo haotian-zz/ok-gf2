@@ -39,6 +39,23 @@ def sort_characters_by_priority(chars, priority):
 
 
 class DailyBattleMixin:
+    def _open_campaign_tab(self, tab, expect, fallback_xy):
+        """
+        战役推进页顶部切页签（补给作战/模拟作战）。实录 2560x1440：页面还在过渡时按固定坐标点一下会落空，
+        停在「剧情战役」；现在按文字点，点完确认目标内容出现，没出现再点，最多 3 次。
+        """
+        for attempt in range(3):
+            if not self.wait_click_ocr(
+                match=tab, box=self.box.top, time_out=3, after_sleep=1, raise_if_not_found=False, log=True
+            ):
+                self.click_relative(fallback_xy[0], fallback_xy[1], after_sleep=1)
+            if self.wait_ocr(match=expect, time_out=3, raise_if_not_found=False):
+                return True
+            self.log_info(f"点了「{tab}」页签但还没看到目标内容，再点一次（第 {attempt + 1} 次）", notify=False)
+            self.next_frame()
+        self.screenshot(f"campaign_tab_{tab}")
+        raise Exception(f"战役推进里切不到「{tab}」页签，看 campaign_tab 截图")
+
     def battle(self):
         if self.config.get("自主循环"):
             self.ensure_main()
@@ -49,7 +66,7 @@ class DailyBattleMixin:
             match=re.compile("战役推进"), box=self.box.top_right, after_sleep=0.5, raise_if_not_found=True
         )
         self.wait_ocr(match=re.compile("补给作战"), box=self.box.top_right, raise_if_not_found=True)
-        self.click_relative(0.78, 0.05)
+        self._open_campaign_tab("补给作战", re.compile("军备解析|深度搜索|决策构象|标准同调"), (0.78, 0.05))
         if self.is_adb():
             self.swipe_relative(0.8, 0.6, 0.5, 0.6, duration=1)
         self.sleep(1)
@@ -89,8 +106,7 @@ class DailyBattleMixin:
             match=re.compile("战役推进"), box=self.box.top_right, after_sleep=1, raise_if_not_found=True
         )
         self.wait_ocr(match=re.compile("补给作战"), box=self.box.top_right, raise_if_not_found=True)
-        self.sleep(1)
-        self.click_relative(0.89, 0.05)  # 模拟战斗
+        self._open_campaign_tab("模拟作战", "实兵演习", (0.89, 0.05))
         self.wait_click_ocr(match=["实兵演习"], box=self.box.bottom, after_sleep=0.5, raise_if_not_found=True)
         self.wait_pop_up(time_out=15, count=1)
         remaining_count = self.arena_remaining()
