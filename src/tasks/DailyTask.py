@@ -166,6 +166,10 @@ class DailyTask(
             }
         )
         for group, keys in self.default_config_group.items():
+            if group not in self.default_config:
+                # 「自主循环跳过项」这种只用来分组、不是真实开关的名字，不能写成 sub_configs：
+                # 框架会把它当成父开关去读值（读到 None），子项全部判成隐藏，Web 接口里就看不到「自动刷体力」「竞技场」了
+                continue
             self.config_type.update({group: {"sub_configs": {True: keys}}})
 
     def build_task_plan(self):
