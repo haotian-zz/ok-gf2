@@ -1837,11 +1837,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.click(next_step, after_sleep=1)
             boxes = self.ocr(log=True, threshold=0.8, frame_processor=self.make_hsv_isolator(hR.WHITE))
             # default_cost = 30
-        current = self.ocr(match=[stamina_re, number_re], box=self.box_of_screen(0.84, 0, 0.99, 0.10))
-        if current:
-            current = int(current[0].name.split("/")[0])
-        else:
-            current = 1
+        # 实录：右上角金币「447760」尾巴会落进这个框被当成体力（读成 60/760），只认「147/240」这种带斜杠的
+        current = self._read_stamina(default=1)
         self.sleep(1)
         if (
             len(find_boxes_by_name(boxes, ["确认", "取消", "上一步"])) != 2
@@ -1914,9 +1911,14 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         return zilv_locked(zg, cg)
 
     def _read_stamina(self, default=None):
-        boxes = self.ocr(box=self.box_of_screen(0.84, 0, 0.99, 0.10), match=[stamina_re, number_re])
-        if boxes:
-            return int(boxes[0].name.split("/")[0])
+        """右上角「147/240」里的当前体力；金币数等纯数字一律不认，读不到返回 default。"""
+        for _ in range(2):
+            value = stamina_value(self.ocr(box=self.box_of_screen(0.80, 0, 0.99, 0.10)), self.height)
+            if value is not None:
+                return value
+            self.sleep(0.5)
+            self.next_frame()
+        self.log_info("右上角没读到体力数字", notify=False)
         return default
 
     def _manual_stamina_battle(self, set_cost, current=None):
@@ -1934,6 +1936,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         ):
             self.debug_shot("manual_challenge_missing")
             raise Exception("自律不可用，但选关面板上也没找到「挑战」按钮")
+        if self.wait_ocr(match=stamina_popup_re, time_out=2, raise_if_not_found=False):
+            # 体力读错了也不怕：真不够会弹「情报拼图补充」，取消掉当作刷完
+            self.log_info("点挑战弹出体力不足，今天的体力刷完了", notify=True)
+            self._cancel_stamina_popup()
+            self.wait_ocr(match=challenge_button_re, box=self.box.bottom_right, time_out=5, raise_if_not_found=False)
+            return 0
         self.auto_battle(end_match=["自律", "挑战"], end_box=self.box.bottom_right)
         self.sleep(1)
         self.next_frame()

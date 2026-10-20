@@ -232,6 +232,13 @@ class TestStaminaPopup(unittest.TestCase):
         ]
         self.assertEqual(popup_texts(boxes, self.title, self.h), ["快速取出调度室储存情报拼图", "确认"])
 
+    def test_stamina_value_ignores_coin_tail(self):
+        from src.core.BaseGfTask import stamina_value
+
+        boxes = [Box(1075, 20, 30, 20, name="60"), Box(1150, 20, 70, 20, name="147/240")]
+        self.assertEqual(stamina_value(boxes, 768), 147)
+        self.assertIsNone(stamina_value([Box(1075, 20, 30, 20, name="760")], 768))
+
     def test_stamina_value(self):
         # 实录：接入密钥兑换后弹窗还开着，右上角 9/240 变成 69/240，靠这个数判断成功
         boxes = [Box(1085, 22, 46, 18, name="9/240"), Box(600, 345, 28, 16, name="136"), Box(730, 530, 40, 20, name="确认")]
