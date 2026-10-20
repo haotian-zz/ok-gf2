@@ -535,12 +535,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
     def _ensure_panel(self):
         """右侧卡片面板可能被点地图关掉了（页签消失），点「作战开始」左边的按钮把它打开。"""
-        if self._ocr_panel(TAB_BOX, match=self.fix_match_regex(["我的人形", "好友助战"])):
+        if self._ocr_panel(TAB_BOX, match=self.fix_match_regex(["我的人形", "好友助战", "可部署人形"])):
             return True
         self.log_info("部署面板没打开，点左下按钮打开", notify=False)
         self.click_relative(0.37, 0.915, after_sleep=1)
         self.next_frame()
-        ok = bool(self._ocr_panel(TAB_BOX, match=self.fix_match_regex(["我的人形", "好友助战"])))
+        ok = bool(self._ocr_panel(TAB_BOX, match=self.fix_match_regex(["我的人形", "好友助战", "可部署人形"])))
         self.debug_shot("panel_open" if ok else "panel_open_fail")
         return ok
 
@@ -731,6 +731,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
     def _click_tab(self, name):
         """点「我的人形 / 好友助战」页签。OCR 偶尔漏读（实录：页签明明在却没认出来），多读几帧，再不行按固定位置点。"""
         for attempt in range(3):
+            if name == "我的人形" and (single := self._ocr_panel(TAB_BOX, match=self.fix_match_regex(["可部署人形"]))):
+                # 扩编实练等没有好友助战的关卡：面板只有「可部署人形」一页，布局同「我的人形」，不用切
+                return single[0]
             tab = self._ocr_panel(TAB_BOX, match=self.fix_match_regex([name]))
             if tab:
                 self.click(tab[0], after_sleep=1)
