@@ -84,8 +84,11 @@ def main():
         easy_drag=False,
     )
     api._window = window
+    # 默认 private_mode=True 时页面的 localStorage（主题、折叠状态等）不落盘，每次启动都会重置
+    storage = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "webview")
+    os.makedirs(storage, exist_ok=True)
     try:
-        webview.start()
+        webview.start(private_mode=False, storage_path=storage)
     finally:
         server.should_exit = True
         thread.join(timeout=10)
