@@ -257,3 +257,7 @@ python -m unittest tests/TestMain.py
 * [ok-oldking/OnnxOCR](https://github.com/ok-oldking/OnnxOCR)
 * [zhiyiYo/PyQt-Fluent-Widgets](https://github.com/zhiyiYo/PyQt-Fluent-Widgets)
 * [ok-oldking/ok-script](https://github.com/ok-oldking/ok-script)
+
+## 图形界面
+
+新界面（按 MXU 风格做的，按游戏板块分组 + 一键预设）用 `run_v2.bat` 打开，说明见 [docs/新版界面.md](docs/新版界面.md)。旧的 Qt 界面不再维护。

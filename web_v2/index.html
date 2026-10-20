@@ -1,85 +1,12 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ok-gf2 新版界面（测试）</title>
-<link rel="stylesheet" href="/v2/style.css">
-</head>
-<body>
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-title">少前2 自动化</span>
-    <span class="brand-sub">新版界面 · 测试</span>
-  </div>
-  <div class="run-state" id="run-state">
-    <span class="dot" id="state-dot"></span>
-    <span id="state-text">连接中…</span>
-  </div>
-  <div class="run-actions">
-    <button class="btn primary" id="btn-start" title="运行当前选中的任务">▶ 开始</button>
-    <button class="btn" id="btn-pause">⏸ 暂停</button>
-    <button class="btn danger" id="btn-stop">■ 停止</button>
-    <a class="btn ghost" href="/" target="_blank">旧版界面</a>
-  </div>
-</header>
-
-<div class="shell">
-  <nav class="sidenav">
-    <button class="nav-item active" data-page="tasks">任务</button>
-    <button class="nav-item" data-page="settings">全局设置</button>
-    <button class="nav-item" data-page="logs">运行日志</button>
-    <button class="nav-item" data-page="capture">画面</button>
-  </nav>
-
-  <main class="content">
-    <section class="page active" id="page-tasks">
-      <div class="col col-list">
-        <div class="col-head">
-          <span>任务（按游戏板块）</span>
-          <div class="preset-bar" id="preset-bar"></div>
-        </div>
-        <div class="group-list" id="group-list"></div>
-      </div>
-      <div class="col col-options">
-        <div class="col-head"><span id="option-title">选项</span></div>
-        <div class="option-panel" id="option-panel"><p class="muted">在左侧选一个任务项查看它的选项。</p></div>
-      </div>
-      <div class="col col-status">
-        <div class="col-head"><span>运行状态</span></div>
-        <div class="status-panel" id="status-panel"></div>
-        <div class="col-head"><span>最近日志</span></div>
-        <pre class="log-tail" id="log-tail"></pre>
-      </div>
-    </section>
-
-    <section class="page" id="page-settings">
-      <div class="settings-wrap" id="settings-wrap"></div>
-    </section>
-
-    <section class="page" id="page-logs">
-      <div class="log-tools">
-        <select id="log-level">
-          <option value="ALL">全部</option><option value="INFO">INFO</option><option value="WARNING">WARNING</option><option value="ERROR">ERROR</option>
-        </select>
-        <input id="log-query" placeholder="过滤关键字（回车）">
-        <label><input type="checkbox" id="log-follow" checked> 自动滚动</label>
-      </div>
-      <pre class="log-full" id="log-full"></pre>
-    </section>
-
-    <section class="page" id="page-capture">
-      <div class="capture-tools">
-        <button class="btn" id="btn-capture">抓一帧</button>
-        <label><input type="checkbox" id="capture-auto"> 每 3 秒自动抓</label>
-        <span class="muted" id="capture-msg"></span>
-      </div>
-      <img id="capture-img" alt="还没有截图">
-    </section>
-  </main>
-</div>
-
-<div class="toast" id="toast"></div>
-<script src="/v2/app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>少前2 自动化</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
