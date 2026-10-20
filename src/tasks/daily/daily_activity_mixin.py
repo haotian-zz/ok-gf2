@@ -28,11 +28,16 @@ class DailyActivityMixin:
         uncertain = False
         try:
             self.wait_click_ocr(match=["活动"], box=self.box._activities, after_sleep=1, raise_if_not_found=True)
-            # 实录：点了「活动」截图里还是主页（图标只是亮了），列表根本没打开；确认一下，没开就再点一次
-            if len(self.ocr(box=self.box.right, match=["整备室", "公共区", "活动层", "招募"])) >= 2:
-                self.log_info("点了「活动」但还在主页，再点一次", notify=False)
+            # 实录（tests/fixtures/activity_page_1280x768.png）：点「活动」后主页 UI 先淡出，约 5~9 秒活动页才出来，
+            # 不能 1 秒就判"没打开"再点一次——第二下会点到过渡中的别的东西（上次点进了编队总览）
+            if not self._wait_activity_page():
+                self.log_info("点了「活动」12 秒还没见到活动页，再点一次", notify=False)
                 self.screenshot("activity_page_not_opened")
-                self.wait_click_ocr(match=["活动"], box=self.box._activities, after_sleep=2, raise_if_not_found=True)
+                self.ensure_main()
+                self.wait_click_ocr(match=["活动"], box=self.box._activities, after_sleep=1, raise_if_not_found=True)
+                if not self._wait_activity_page():
+                    self.screenshot("activity_page_not_opened_2")
+                    raise Exception("点「活动」两次都没打开活动页，看 activity_page_not_opened 截图")
             for reward_activity in ("情报补给", "战前补给"):
                 self.info_set(reward_activity, "检查中")
                 if not self._open_supply_activity(reward_activity):
@@ -51,6 +56,12 @@ class DailyActivityMixin:
             return "待核查" if uncertain or not checked else True
         finally:
             self.ensure_main()
+
+    def _wait_activity_page(self, time_out=12):
+        """活动页特征：左上角「新手/活动」页签，或右下角「前往」按钮。"""
+        return self.wait_ocr(
+            match=[re.compile("^新手$"), re.compile("^前往$")], time_out=time_out, raise_if_not_found=False
+        )
 
     def _open_supply_activity(self, reward_activity):
         menu_box = self.box_of_screen(0.035, 0.10, 0.23, 0.84)
@@ -378,9 +389,19 @@ class DailyActivityMixin:
         if need_again_test:
             times = 2
         for attempt in range(times):
-            if result := self.wait_ocr(match=entry_match, time_out=3):
+            result = self.wait_ocr(match=entry_match, time_out=3)
+            if not result:
+                # 实录：走完站在了交互点旁边（图标已经显示）但提示文字没出来，往前/往后蹭一小步再看
+                for key, hold in (("w", 0.25), ("s", 0.4)):
+                    self.log_info(f"没看到「{entry_match.pattern}」提示，按 {key} {hold}s 微调位置再找", notify=False)
+                    self.press_keys_sequence([key], [hold], sleep_between=0)
+                    self.sleep(0.8)
+                    if result := self.wait_ocr(match=entry_match, time_out=2):
+                        break
+            if result:
                 self.click_with_key("alt", result)
             else:
+                self.screenshot(f"food_entry_missing_{entry_match.pattern}")
                 return "entry"
             if done_match is not None and self.wait_ocr(
                 match=done_match, box=self.box.bottom_right, time_out=3, raise_if_not_found=False, log=True
