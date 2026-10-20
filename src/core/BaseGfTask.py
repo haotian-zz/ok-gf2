@@ -36,6 +36,7 @@ from src.core.support_select import (
     read_badge,
 )
 from src.core.debug_config import DEBUG_OPTION_NAME, KEY_DEBUG_SHOT
+from src.core.stamina_config import KEY_AUTO_POTION, STAMINA_OPTION_NAME
 from src.core.lineup_config import KEY_FALLBACK, KEY_MIN_BADGE, KEY_PRESET, KEY_ROLE, LINEUP_OPTION_NAME
 from src.data.FeatureList import FeatureList as fL
 from src.image.frame_processs import isolate_by_hsv_ranges
@@ -1076,16 +1077,23 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
     def _handle_stamina_popup(self, title):
         """
-        体力不足弹窗：开了「自动使用体力药」就只用调度室储存/情报拼图道具恢复，
+        体力不足弹窗：全局设置「体力」里开了「自动使用体力药」就只用调度室储存/情报拼图道具恢复，
         没开、或两种都用不了，就取消弹窗并抛异常停止任务，绝不消耗坍塌晶条。
         """
         self.debug_shot("stamina_popup", [title])
-        if not self.config.get("自动使用体力药", False):
+        if not self.auto_potion_enabled():
             self._cancel_stamina_popup()
-            raise Exception("体力不足，已停止；要自动用体力药请打开「自动使用体力药」选项")
+            raise Exception("体力不足，已停止；要自动用体力药请打开设置页「体力」里的「自动使用体力药」")
         if self.restore_stamina(title):
             return
         raise Exception("体力不足，调度室储存和情报拼图道具都用不了，已停止（不会使用坍塌晶条）")
+
+    def auto_potion_enabled(self):
+        """全局设置「体力」→「自动使用体力药」；读不到按关闭处理。"""
+        try:
+            return bool(self.get_global_config(STAMINA_OPTION_NAME).get(KEY_AUTO_POTION, False))
+        except Exception:
+            return False
 
     def _cancel_stamina_popup(self):
         self.next_frame()
@@ -1936,12 +1944,20 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         ):
             self.debug_shot("manual_challenge_missing")
             raise Exception("自律不可用，但选关面板上也没找到「挑战」按钮")
-        if self.wait_ocr(match=stamina_popup_re, time_out=2, raise_if_not_found=False):
-            # 体力读错了也不怕：真不够会弹「情报拼图补充」，取消掉当作刷完
-            self.log_info("点挑战弹出体力不足，今天的体力刷完了", notify=True)
-            self._cancel_stamina_popup()
-            self.wait_ocr(match=challenge_button_re, box=self.box.bottom_right, time_out=5, raise_if_not_found=False)
-            return 0
+        if pop := self.wait_ocr(match=stamina_popup_re, time_out=2, raise_if_not_found=False):
+            # 体力读错了也不怕：真不够会弹「情报拼图补充」。全局「体力」开了自动用药就恢复后再点挑战，没开就当刷完
+            if self.auto_potion_enabled() and self.restore_stamina(pop[0]):
+                self.log_info("体力不足，已用体力药恢复，重新点「挑战」", notify=True)
+                self.next_frame()
+                if not self.wait_click_ocr(
+                    match=challenge_button_re, box=self.box.bottom_right, time_out=5, after_sleep=2, raise_if_not_found=False
+                ):
+                    raise Exception("恢复体力后没找到「挑战」按钮")
+            else:
+                self.log_info("点挑战弹出体力不足，今天的体力刷完了", notify=True)
+                self._cancel_stamina_popup()
+                self.wait_ocr(match=challenge_button_re, box=self.box.bottom_right, time_out=5, raise_if_not_found=False)
+                return 0
         self.auto_battle(end_match=["自律", "挑战"], end_box=self.box.bottom_right)
         self.sleep(1)
         self.next_frame()

@@ -1,6 +1,7 @@
 import os
 
 from src.core.debug_config import debug_option
+from src.core.stamina_config import stamina_option
 from src.core.lineup_config import lineup_option
 
 version = "dev"
@@ -77,7 +78,7 @@ config = {
     "trigger_tasks": [  # 循环触发的任务
         ["src.tasks.TemplateMonitorTask", "TemplateMonitorTask"],
     ],
-    "global_configs": [lineup_option, debug_option],  # 全局配置：设置页里的「阵容与助战」「调试」
+    "global_configs": [lineup_option, stamina_option, debug_option],  # 全局配置：设置页里的「阵容与助战」「体力」「调试」
     "custom_tabs": [  # 自定义界面页
         ["src.gui.AccountConfigTab", "AccountConfigTab"],
         ["src.gui.ImportantNoticesTab", "ImportantNoticesTab"],
