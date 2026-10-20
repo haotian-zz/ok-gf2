@@ -9,6 +9,9 @@ from src.core.lineup_config import preset_name_for_kind, support_enabled_for_kin
 
 OUTPOST_KIND = "尘烟前哨战"
 power_re = re.compile(r"^\d{3,6}$")
+# 前哨战编队界面右下「阵容」：我方格子在左，最右一格是班组助战（关掉助战开关时也是我方格子）
+OUTPOST_OWN_SLOTS = (0.61, 0.69, 0.87, 0.83)
+OUTPOST_SUPPORT_SLOT = (0.87, 0.69, 0.97, 0.83)
 
 
 def sort_characters_by_priority(chars, priority):
@@ -295,6 +298,10 @@ class DailyBattleMixin:
         self.next_frame()
         self.debug_shot("chenyan_outpost_ready")
         self.wait_click_ocr(match="确定", box=self.box.bottom_right, after_sleep=2, raise_if_not_found=True)
+        # 没坐满（比如今天能上的人不够、助战没借上）会弹「仍有可上阵的位置，是否依然开始作战」
+        if self.wait_ocr(match=re.compile("仍有可上阵"), time_out=2):
+            self.log_info("阵容没坐满，确认直接开战")
+            self.wait_click_ocr(match=re.compile("^确认$"), box=self.box.bottom, after_sleep=2, raise_if_not_found=True)
         # 前哨战的阵容在编队界面已经定好，战斗里不再走部署界面的整理阵容
         kind = self._lineup_kind
         self.set_lineup_kind(None)
@@ -344,13 +351,16 @@ class DailyBattleMixin:
         else:
             self.log_info(f"前哨战编队列表里没找到「{name}」，沿用当前编队", notify=True)
 
-    def _outpost_slot_count(self):
-        """阵容格子里有人时格子底下显示战力数字。"""
-        return len(self.ocr(box=self.box_of_screen(0.61, 0.69, 0.97, 0.83), match=power_re))
+    def _outpost_slot_count(self, support_slot=False):
+        """阵容格子里有人时格子底下显示战力数字。support_slot=False 时最右格不算（开助战时它是助战格）。"""
+        area = (OUTPOST_OWN_SLOTS[0], OUTPOST_OWN_SLOTS[1], OUTPOST_SUPPORT_SLOT[2], OUTPOST_SUPPORT_SLOT[3]) if support_slot else OUTPOST_OWN_SLOTS
+        return len(self.ocr(box=self.box_of_screen(*area), match=power_re))
 
     def _outpost_fill_top_power(self, slots):
         """先撤掉阵容里已有的人，再按卡片底下的战力从高到低点，点了没上场（如今天已出战）就换下一个。"""
-        slot_box = self.box_of_screen(0.61, 0.69, 0.97, 0.83)
+        # 关助战时 5 格都是我方；开助战时最右格是助战，清空只清我方格
+        slot_box = self.box_of_screen(*(OUTPOST_OWN_SLOTS if slots == 4 else (
+            OUTPOST_OWN_SLOTS[0], OUTPOST_OWN_SLOTS[1], OUTPOST_SUPPORT_SLOT[2], OUTPOST_SUPPORT_SLOT[3])))
         for _ in range(6):
             filled = self.ocr(box=slot_box, match=power_re)
             if not filled:
@@ -362,9 +372,9 @@ class DailyBattleMixin:
         for card in cards:
             if len(picked) >= slots:
                 break
-            before = self._outpost_slot_count()
+            before = self._outpost_slot_count(support_slot=slots == 5)
             self.click_box(card, after_sleep=0.6)
-            if self._outpost_slot_count() > before:
+            if self._outpost_slot_count(support_slot=slots == 5) > before:
                 picked.append(card.name)
             else:
                 self.log_info(f"战力 {card.name} 的人形点了没上场，换下一个")
@@ -387,7 +397,13 @@ class DailyBattleMixin:
         return on
 
     def _outpost_pick_support(self):
-        """点「助战」打开班组助战弹窗，借战力最高的人形；借不到就关掉弹窗不借。"""
+        """
+        助战格空着就点「助战」打开班组助战弹窗，借战力最高的人形：点卡片选中后按钮变「入队」，点了弹窗关掉就算借上。
+        助战格已经有人（游戏会记住上一场）就沿用。借不到就关掉弹窗不借。
+        """
+        if borrowed := self.ocr(box=self.box_of_screen(*OUTPOST_SUPPORT_SLOT), match=power_re):
+            self.log_info(f"助战格已有人形（战力 {borrowed[0].name}），沿用")
+            return True
         if not self.wait_click_ocr(match=re.compile("^助战$"), box=self.box_of_screen(0.85, 0.79, 0.97, 0.87),
                                    time_out=3, after_sleep=1.5):
             self.log_info("没找到「助战」按钮，不借助战")
@@ -399,8 +415,10 @@ class DailyBattleMixin:
         cards = self.ocr(box=self.box_of_screen(0.18, 0.28, 0.83, 0.74), match=re.compile(r"^\d{4,6}$"))
         cards.sort(key=lambda b: int(b.name), reverse=True)
         for card in cards[:3]:
+            # 点头像会打开人形详情，点战力数字（卡片正文）才是选中
             self.click_box(card, after_sleep=1)
-            self.wait_click_ocr(match="确认", box=self.box_of_screen(0.62, 0.74, 0.83, 0.84), time_out=2, after_sleep=1.5)
+            self.wait_click_ocr(match=re.compile("^(入队|确认)$"), box=self.box_of_screen(0.62, 0.74, 0.83, 0.84),
+                                time_out=2, after_sleep=1.5)
             self.next_frame()
             if not self.ocr(match="班组助战", box=popup_title):
                 self.log_info(f"前哨战借班组助战：战力 {card.name}", notify=True)
