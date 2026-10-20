@@ -10,11 +10,33 @@ Web 模式和桌面版（main.py）不能同时运行。
 """
 
 import argparse
+import json
+import logging
 import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_V2_DIR = os.path.join(ROOT, "web_v2", "static")
+WORKFLOWS_FILE = os.path.join(ROOT, "configs", "workflows.json")  # 新界面里用户自己拼的流程（页签）
+
+
+def load_workflows():
+    try:
+        with open(WORKFLOWS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        logging.getLogger(__name__).warning("workflows.json 读取失败，按空处理: %s", e)
+        return {}
+
+
+def save_workflows(data):
+    os.makedirs(os.path.dirname(WORKFLOWS_FILE), exist_ok=True)
+    tmp = WORKFLOWS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, WORKFLOWS_FILE)
 
 
 def build_app():
@@ -49,6 +71,15 @@ def build_app():
     @app.get("/v2/")
     async def v2_index():
         return FileResponse(index)
+
+    @app.get("/api/v2/workflows")
+    async def get_workflows():
+        return load_workflows()
+
+    @app.put("/api/v2/workflows")
+    async def put_workflows(body: dict):
+        save_workflows(body)
+        return {"ok": True}
 
     app.mount("/v2", StaticFiles(directory=WEB_V2_DIR), name="web_v2")
     _configure_server_logging()

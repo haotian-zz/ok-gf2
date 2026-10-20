@@ -1,19 +1,17 @@
-/** 一键预设面板（沿用 MXU PresetSelector 的卡片样式）。 */
-import { Loader2, Sparkles, X } from 'lucide-react';
-import { useState } from 'react';
-import { currentWorkflow, useStore, workflowEntries } from '@/store';
+/** 一键预设面板（沿用 MXU PresetSelector 的卡片样式）：把流程里的块按预设勾上 / 取消，缺的补进来。 */
+import { Sparkles, X } from 'lucide-react';
+import { currentWorkflow, presetsOf, useStore } from '@/store';
 
 export function PresetPanel() {
   const catalog = useStore((s) => s.catalog);
+  const workflows = useStore((s) => s.workflows);
   const prefs = useStore((s) => s.prefs);
   const applyPreset = useStore((s) => s.applyPreset);
   const setPrefs = useStore((s) => s.setPrefs);
   const status = useStore((s) => s.status);
-  const [applying, setApplying] = useState<string | null>(null);
-  const wf = currentWorkflow({ catalog, prefs });
-  const presets = wf?.presets ?? [];
+  const wf = currentWorkflow({ workflows, prefs });
+  const presets = presetsOf(wf, catalog);
   if (!wf || !presets.length) return null;
-  const total = workflowEntries(wf).length;
   const running = !!status.running && !!status.current_task;
 
   return (
@@ -34,27 +32,14 @@ export function PresetPanel() {
           <button
             key={p.id}
             type="button"
-            disabled={running || applying !== null}
-            onClick={async () => {
-              setApplying(p.id);
-              try {
-                await applyPreset(p.id);
-              } finally {
-                setApplying(null);
-              }
-            }}
+            disabled={running}
+            onClick={() => applyPreset(p.id)}
             className="w-full text-left p-3 rounded-lg border border-border bg-bg-secondary hover:bg-bg-hover hover:border-accent transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <div className="flex items-center gap-2 mb-1">
-              {applying === p.id ? (
-                <Loader2 className="w-4 h-4 text-accent animate-spin flex-shrink-0" />
-              ) : (
-                <Sparkles className="w-4 h-4 text-accent flex-shrink-0" />
-              )}
+              <Sparkles className="w-4 h-4 text-accent flex-shrink-0" />
               <span className="text-sm font-medium text-text-primary truncate">{p.label}</span>
-              <span className="text-xs text-text-muted ml-auto flex-shrink-0">
-                {p.entries.length}/{total} 项
-              </span>
+              <span className="text-xs text-text-muted ml-auto flex-shrink-0">{p.components.length} 块</span>
             </div>
             {p.desc && <div className="text-xs text-text-secondary line-clamp-2">{p.desc}</div>}
           </button>

@@ -1,9 +1,9 @@
-/** 任务卡片：沿用 MXU TaskItem 的结构（复选框 + 名称 + 选项预览 + 展开面板）。 */
-import { useEffect, useMemo, useRef, useState } from 'react';
+/** 流程里的一块（沿用 MXU TaskItem 的结构）：复选框 + 名称 + 选项预览 + 展开面板 + 移出。 */
+import { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { ChevronRight, Play, RotateCcw, SlidersHorizontal, Zap, ZapOff } from 'lucide-react';
-import type { CatalogEntry, CatalogWorkflow, ConfigField, TaskInfo } from '@/api';
-import { entryOptionKeys, fieldOf, taskProgress, useStore } from '@/store';
+import { ChevronRight, Play, RotateCcw, Trash2, Zap, ZapOff } from 'lucide-react';
+import type { CatalogComponent, ConfigField, TaskInfo, Workflow, WorkflowItem } from '@/api';
+import { entryOptionKeys, itemFields, taskProgress, useStore } from '@/store';
 import { Checkbox } from './ui/Checkbox';
 import { ConfirmDialog } from './ui/Modal';
 import { OptionList } from './OptionEditor';
@@ -45,68 +45,61 @@ function PreviewTag({ field }: { field: ConfigField }) {
 
 export function TaskItem({
   workflow,
-  entry,
+  item,
+  component,
   task,
 }: {
-  workflow: CatalogWorkflow;
-  entry: CatalogEntry;
+  workflow: Workflow;
+  item: WorkflowItem;
+  component: CatalogComponent;
   task: TaskInfo | undefined;
 }) {
-  const expanded = useStore((s) => s.prefs.expanded.includes(entry.id));
+  const expanded = useStore((s) => s.prefs.expanded.includes(item.uid));
   const toggleExpanded = useStore((s) => s.toggleExpanded);
-  const setTaskConfig = useStore((s) => s.setTaskConfig);
-  const resetTaskConfig = useStore((s) => s.resetTaskConfig);
-  const startTask = useStore((s) => s.startTask);
+  const setItemEnabled = useStore((s) => s.setItemEnabled);
+  const setItemConfig = useStore((s) => s.setItemConfig);
+  const resetItem = useStore((s) => s.resetItem);
+  const removeItem = useStore((s) => s.removeItem);
+  const runItem = useStore((s) => s.runItem);
   const taskAction = useStore((s) => s.taskAction);
   const status = useStore((s) => s.status);
+  const busy = useStore((s) => s.busy);
+  const justAdded = useStore((s) => s.justAdded === item.uid);
   const di = useMemo(() => taskProgress(task), [task]);
   const [confirmReset, setConfirmReset] = useState(false);
-  const focused = useStore((s) => s.focusedEntry === entry.id);
-  const rootRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (focused) rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [focused]);
-  const lineupScopesOfEntry = entry.lineup_scopes ?? [];
+  const scopes = component.lineup_scopes ?? [];
 
-  /** 这张卡属于工作流的主任务（随底部「开始」一起跑），而不是独立任务 */
-  const isDaily = !!task && task.class_name === workflow.task;
-  const enableField = entry.enable_key ? fieldOf(task, entry.enable_key) : undefined;
-  const enabled = entry.enable_key ? !!enableField?.value : isDaily ? true : !!task?.enabled;
-  const optionKeys = entryOptionKeys(entry, task);
-  const optionFields = optionKeys
-    .map((k) => fieldOf(task, k))
-    .filter((f): f is ConfigField => !!f);
-  const canExpand = !!task && (optionFields.length > 0 || lineupScopesOfEntry.length > 0 || !!entry.doc || !!task.description);
+  const isTrigger = !!task?.trigger;
+  const enabled = isTrigger ? !!task?.enabled : item.enabled;
+  const optionKeys = entryOptionKeys(component, task);
+  const fields = task ? itemFields(item, task) : [];
+  const optionFields = optionKeys.map((k) => fields.find((f) => f.key === k)).filter((f): f is ConfigField => !!f);
+  const canExpand = !!task && (optionFields.length > 0 || scopes.length > 0 || !!component.doc || !!task.description);
   const executorRunning = !!status.running && !!status.current_task;
+  const changedKeys = Object.keys(item.config).length + Object.keys(item.lineup).length;
 
-  // 运行状态：独立任务看 running；日常子项看「当前任务」是否就是它
+  // 运行状态：子项看「当前任务」是否就是它；整任务块看任务自己的 running
   const runStatus: 'idle' | 'running' | 'done' | 'retry' = (() => {
     if (!task) return 'idle';
-    if (!isDaily) return task.running ? 'running' : 'idle';
-    if (entry.enable_key) {
-      if (executorRunning && status.current_task === task.name && di.raw.current_task === entry.enable_key)
-        return 'running';
-      if (di.done.includes(entry.enable_key)) return 'done';
-      if (di.retry.includes(entry.enable_key)) return 'retry';
-    }
+    if (!component.enable_key) return task.running ? 'running' : 'idle';
+    if (executorRunning && status.current_task === task.name && di.raw.current_task === component.enable_key) return 'running';
+    if (di.done.includes(component.enable_key)) return 'done';
+    if (di.retry.includes(component.enable_key)) return 'retry';
     return 'idle';
   })();
 
   const handleCheckbox = () => {
     if (!task) return;
-    if (entry.enable_key) void setTaskConfig(task.name, entry.enable_key, !enabled).catch(() => {});
-    else if (task.trigger) void taskAction(task.name, task.enabled ? 'disable' : 'enable');
+    if (isTrigger) void taskAction(task.name, task.enabled ? 'disable' : 'enable');
+    else setItemEnabled(item.uid, !item.enabled);
   };
-
-  const checkboxDisabled = !task || (!entry.enable_key && !task.trigger);
 
   return (
     <div
-      ref={rootRef}
       className={clsx(
         'group bg-bg-secondary rounded-lg border border-border transition-shadow relative overflow-hidden',
         runStatus === 'running' && 'task-item-running',
-        focused && 'ring-2 ring-accent/60',
+        justAdded && 'animate-task-slide-in',
       )}
     >
       {runStatus !== 'idle' && (
@@ -122,44 +115,42 @@ export function TaskItem({
       )}
 
       <div className="flex items-center gap-2 p-3 pl-4">
-        {checkboxDisabled ? (
-          <Tooltip content={!task ? '任务类未注册' : isDaily ? `选项卡片，随「开始${workflow.label}」生效` : '独立任务，直接在右侧「运行」'}>
+        {!task ? (
+          <Tooltip content="任务类未注册">
             <span className="w-4 h-4 flex items-center justify-center text-text-muted">
-              {isDaily ? <SlidersHorizontal className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+              <Play className="w-3 h-3" />
             </span>
           </Tooltip>
         ) : (
           <Checkbox
             checked={enabled}
-            disabled={executorRunning && isDaily}
-            title={task?.trigger ? (enabled ? '停用触发任务' : '启用触发任务') : enabled ? '取消勾选' : '勾选加入一键日常'}
+            disabled={executorRunning && !isTrigger}
+            title={isTrigger ? (enabled ? '停用触发任务' : '启用触发任务') : enabled ? '取消勾选' : `勾选，随「${workflow.label}」一起跑`}
             onClick={handleCheckbox}
           />
         )}
 
         <div className="flex-1 flex items-center min-w-0">
           <div
-            className={clsx('flex items-center gap-1 min-w-0 overflow-hidden', !checkboxDisabled && 'cursor-pointer')}
-            onClick={() => !checkboxDisabled && handleCheckbox()}
+            className={clsx('flex items-center gap-1 min-w-0 overflow-hidden', task && 'cursor-pointer')}
+            onClick={() => task && handleCheckbox()}
           >
-            <span
-              className={clsx(
-                'min-w-0 text-sm font-medium truncate',
-                enabled || checkboxDisabled ? 'text-text-primary' : 'text-text-muted',
-              )}
-            >
-              {entry.label}
+            <span className={clsx('min-w-0 text-sm font-medium truncate', enabled || !task ? 'text-text-primary' : 'text-text-muted')}>
+              {component.label}
             </span>
           </div>
 
-          {!task && (
-            <span className="ml-2 px-1.5 py-0.5 text-xs rounded bg-warning/10 text-warning">未注册</span>
-          )}
-          {task && !isDaily && task.trigger && (
+          {!task && <span className="ml-2 px-1.5 py-0.5 text-xs rounded bg-warning/10 text-warning">未注册</span>}
+          {isTrigger && (
             <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded bg-bg-tertiary text-text-tertiary">
-              {task.enabled ? <Zap className="w-3 h-3 text-accent" /> : <ZapOff className="w-3 h-3" />}
+              {task?.enabled ? <Zap className="w-3 h-3 text-accent" /> : <ZapOff className="w-3 h-3" />}
               触发任务
             </span>
+          )}
+          {changedKeys > 0 && (
+            <Tooltip content="这一块在这个流程里有单独改过的设置，不影响别的流程">
+              <span className="ml-2 px-1.5 py-0.5 text-[11px] rounded-full border border-accent/60 text-accent whitespace-nowrap">已单独设置</span>
+            </Tooltip>
           )}
           {runStatus === 'done' && (
             <span className="ml-2 px-1.5 py-0.5 text-xs rounded bg-accent/10 text-accent whitespace-nowrap">今日已完成</span>
@@ -168,43 +159,50 @@ export function TaskItem({
             <span className="ml-2 px-1.5 py-0.5 text-xs rounded bg-warning/10 text-warning whitespace-nowrap">待重试</span>
           )}
 
-          {canExpand && (
-            <div
-              onClick={() => toggleExpanded(entry.id)}
-              className="flex-1 min-w-0 flex items-center self-stretch min-h-[28px] cursor-pointer"
-              title={expanded ? '收起' : '展开'}
-            >
-              {!expanded && (
-                <div className="flex-1 flex items-center gap-1.5 mx-2 overflow-hidden">
-                  {optionFields.slice(0, 4).map((f) => (
-                    <PreviewTag key={f.key} field={f} />
-                  ))}
-                </div>
-              )}
-              <div className="flex shrink-0 items-center justify-end pl-2 ml-auto">
-                <ChevronRight
-                  className={clsx(
-                    'w-4 h-4 text-text-secondary transition-transform duration-150 ease-out',
-                    expanded && 'rotate-90',
-                  )}
-                />
+          <div
+            onClick={() => canExpand && toggleExpanded(item.uid)}
+            className={clsx('flex-1 min-w-0 flex items-center self-stretch min-h-[28px]', canExpand && 'cursor-pointer')}
+            title={canExpand ? (expanded ? '收起' : '展开') : undefined}
+          >
+            {!expanded && (
+              <div className="flex-1 flex items-center gap-1.5 mx-2 overflow-hidden">
+                {optionFields.slice(0, 4).map((f) => (
+                  <PreviewTag key={f.key} field={f} />
+                ))}
               </div>
+            )}
+            <div className="flex shrink-0 items-center justify-end gap-1 pl-2 ml-auto">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeItem(item.uid);
+                }}
+                disabled={executorRunning}
+                className="p-1 rounded opacity-0 group-hover:opacity-100 text-text-muted hover:text-error hover:bg-error/10 transition-all disabled:opacity-0"
+                title="从这个流程移出"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+              {canExpand && (
+                <ChevronRight
+                  className={clsx('w-4 h-4 text-text-secondary transition-transform duration-150 ease-out', expanded && 'rotate-90')}
+                />
+              )}
             </div>
-          )}
+          </div>
         </div>
 
-        {task && !isDaily && !task.trigger && (
+        {task && !component.enable_key && !isTrigger && (
           <button
             type="button"
-            onClick={() => startTask(task.name)}
-            disabled={executorRunning}
+            onClick={() => runItem(item.uid)}
+            disabled={executorRunning || busy}
             className={clsx(
               'flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors shrink-0',
-              executorRunning
-                ? 'text-text-muted cursor-not-allowed'
-                : 'bg-accent/10 text-accent hover:bg-accent hover:text-white',
+              executorRunning || busy ? 'text-text-muted cursor-not-allowed' : 'bg-accent/10 text-accent hover:bg-accent hover:text-white',
             )}
-            title={`单独运行「${task.name}」`}
+            title={`只跑这一块（按这个流程里的设置）`}
           >
             <Play className="w-3 h-3" />
             运行
@@ -219,35 +217,45 @@ export function TaskItem({
         >
           <div className={clsx('min-h-0', expanded ? 'overflow-visible' : 'overflow-hidden')}>
             <div className="border-t border-border bg-bg-tertiary p-3 rounded-b-lg">
-              {(entry.doc || (!isDaily && task?.description)) && (
+              {(component.doc || task?.description) && (
                 <div className={clsx('text-xs text-text-secondary whitespace-pre-line', optionFields.length > 0 && 'mb-4')}>
-                  {entry.doc || task?.description}
+                  {component.doc || task?.description}
                 </div>
               )}
               {task && optionFields.length > 0 && (
                 <OptionList
-                  fields={task.config}
+                  fields={fields}
                   keys={optionKeys}
-                  disabled={executorRunning && isDaily}
-                  onChange={(key, value) => setTaskConfig(task.name, key, value).catch(() => {})}
+                  disabled={executorRunning}
+                  onChange={(key, value) => setItemConfig(item.uid, key, value)}
                 />
               )}
-              {task && lineupScopesOfEntry.length > 0 && (
+              {task && scopes.length > 0 && (
                 <div className={clsx('space-y-3', optionFields.length > 0 && 'mt-4')}>
-                  {lineupScopesOfEntry.map((scope) => (
-                    <LineupCard key={scope} scope={scope} disabled={executorRunning} />
+                  {scopes.map((scope) => (
+                    <LineupCard key={scope} scope={scope} item={item} disabled={executorRunning} />
                   ))}
                 </div>
               )}
               {task && (
-                <div className="mt-3 flex justify-end">
+                <div className="mt-3 flex items-center justify-end gap-4">
+                  <button
+                    type="button"
+                    onClick={() => removeItem(item.uid)}
+                    disabled={executorRunning}
+                    className="inline-flex items-center gap-1 text-xs text-text-muted hover:text-error transition-colors disabled:opacity-40"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    从「{workflow.label}」移出
+                  </button>
                   <button
                     type="button"
                     onClick={() => setConfirmReset(true)}
-                    className="inline-flex items-center gap-1 text-xs text-text-muted hover:text-accent transition-colors"
+                    disabled={executorRunning || changedKeys === 0}
+                    className="inline-flex items-center gap-1 text-xs text-text-muted hover:text-accent transition-colors disabled:opacity-40 disabled:hover:text-text-muted"
                   >
                     <RotateCcw className="w-3 h-3" />
-                    恢复「{task.name}」默认值
+                    恢复默认值
                   </button>
                 </div>
               )}
@@ -256,20 +264,18 @@ export function TaskItem({
         </div>
       )}
 
-      {task && (
-        <ConfirmDialog
-          open={confirmReset}
-          title="恢复默认"
-          message={`把「${task.name}」的全部选项恢复默认？${isDaily ? `\n这会影响「${workflow.label}」里属于这个任务的所有项。` : ''}`}
-          confirmText="恢复"
-          destructive
-          onCancel={() => setConfirmReset(false)}
-          onConfirm={() => {
-            setConfirmReset(false);
-            void resetTaskConfig(task.name);
-          }}
-        />
-      )}
+      <ConfirmDialog
+        open={confirmReset}
+        title="恢复默认"
+        message={`把「${component.label}」在「${workflow.label}」里的选项和阵容恢复成默认值？别的流程里的同一块不受影响。`}
+        confirmText="恢复"
+        destructive
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={() => {
+          setConfirmReset(false);
+          resetItem(item.uid);
+        }}
+      />
     </div>
   );
 }

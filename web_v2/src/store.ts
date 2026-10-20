@@ -4,13 +4,16 @@ import {
   endpoints,
   eventsUrl,
   type Catalog,
-  type CatalogEntry,
+  type CatalogComponent,
   type CatalogGroup,
-  type CatalogWorkflow,
+  type CatalogPreset,
   type ConfigField,
   type ExecutorStatus,
   type SettingsGroup,
   type TaskInfo,
+  type Workflow,
+  type WorkflowItem,
+  type WorkflowsFile,
 } from './api';
 import {
   applyTheme,
@@ -44,9 +47,12 @@ interface UiPrefs {
   screenshotExpanded: boolean;
   statusExpanded: boolean;
   showPresetPanel: boolean;
+  showAddPanel: boolean;
 }
 
 const PREFS_KEY = 'okgf2.ui';
+const WORKFLOWS_VERSION = 1;
+const NEW_WORKFLOW_ICON = '📋';
 
 function loadPrefs(): UiPrefs {
   const base: UiPrefs = {
@@ -58,6 +64,7 @@ function loadPrefs(): UiPrefs {
     screenshotExpanded: true,
     statusExpanded: true,
     showPresetPanel: false,
+    showAddPanel: false,
   };
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -97,6 +104,12 @@ function parseLogs(text: string): LogLine[] {
   return out.slice(-1500);
 }
 
+let uidCounter = 0;
+export function newUid(prefix = 'i'): string {
+  uidCounter += 1;
+  return `${prefix}_${Date.now().toString(36)}${uidCounter.toString(36)}`;
+}
+
 interface State {
   ready: boolean;
   connectionError: string | null;
@@ -116,6 +129,12 @@ interface State {
   screenshotError: string | null;
   streaming: boolean;
   busy: boolean;
+  /** 用户自己拼的流程（页签） */
+  workflows: Workflow[];
+  /** 最近一次从界面启动的流程，顶栏页签的呼吸点用 */
+  runningWorkflowId: string | null;
+  /** 刚加进流程的块，用来播放入场动画 */
+  justAdded: string | null;
 
   init: () => Promise<void>;
   refreshAll: () => Promise<void>;
@@ -127,10 +146,6 @@ interface State {
   clearLogs: () => void;
 
   setPage: (p: Page) => void;
-  setWorkflow: (id: string) => void;
-  /** 从设置页跳到任务页、切到对应工作流并展开某一项 */
-  focusEntry: (id: string) => void;
-  focusedEntry: string | null;
   setPrefs: (patch: Partial<UiPrefs>) => void;
   toggleExpanded: (id: string) => void;
   setAllExpanded: (expanded: boolean) => void;
@@ -138,17 +153,36 @@ interface State {
   setThemePreference: (p: ThemePreference) => void;
   setAccent: (a: string) => void;
 
+  // 流程（页签）
+  setWorkflow: (id: string) => void;
+  addWorkflow: (label?: string, fromTemplate?: string) => string;
+  duplicateWorkflow: (id: string) => string;
+  renameWorkflow: (id: string, label: string) => void;
+  setWorkflowIcon: (id: string, icon: string) => void;
+  moveWorkflow: (id: string, delta: number) => void;
+  removeWorkflow: (id: string) => void;
+  // 流程里的块
+  addItem: (componentId: string) => void;
+  removeItem: (uid: string) => void;
+  setItemEnabled: (uid: string, enabled: boolean) => void;
+  setItemConfig: (uid: string, key: string, value: unknown) => void;
+  setItemLineup: (uid: string, changes: [string, string | null][]) => void;
+  resetItem: (uid: string) => void;
+  setAllEnabled: (enabled: boolean) => void;
+  applyPreset: (presetId: string) => void;
+  // 运行
+  startWorkflow: () => Promise<void>;
+  runItem: (uid: string) => Promise<void>;
+  stop: () => Promise<void>;
+  togglePause: () => Promise<void>;
+
+  // 后端直改（设置页、触发任务）
   setTaskConfig: (taskName: string, key: string, value: unknown) => Promise<void>;
   resetTaskConfig: (taskName: string) => Promise<void>;
   setSetting: (group: string, key: string, value: unknown) => Promise<void>;
   setSettings: (group: string, changes: [string, unknown][]) => Promise<void>;
   resetSetting: (group: string) => Promise<void>;
-  applyPreset: (presetId: string) => Promise<void>;
-  setAllEnabled: (enabled: boolean) => Promise<void>;
-  startTask: (taskName: string) => Promise<void>;
   taskAction: (taskName: string, action: string) => Promise<void>;
-  stop: () => Promise<void>;
-  togglePause: () => Promise<void>;
   captureOnce: () => Promise<void>;
   setStreaming: (on: boolean) => void;
 }
@@ -156,6 +190,7 @@ interface State {
 let eventKey: string | null = null;
 let refreshTimer: number | null = null;
 let streamTimer: number | null = null;
+let saveTimer: number | null = null;
 
 function connectEvents(get: () => State) {
   if (!eventKey) return;
@@ -178,12 +213,45 @@ function connectEvents(get: () => State) {
       }
     };
     ws.onclose = () => {
-
       window.setTimeout(() => connectEvents(get), 3000);
     };
   } catch {
     /* ignore */
   }
+}
+
+/** 从目录模板生成默认流程（第一次打开、或 workflows.json 为空时） */
+function workflowsFromTemplates(catalog: Catalog): Workflow[] {
+  return catalog.templates.map((t) => ({
+    id: t.id,
+    label: t.label,
+    icon: t.icon,
+    desc: t.desc,
+    presets: t.presets,
+    items: t.components.map((c) => ({ uid: newUid(), component: c, enabled: true, config: {}, lineup: {} })),
+  }));
+}
+
+function normalizeWorkflows(raw: Partial<WorkflowsFile> | null | undefined): Workflow[] {
+  const list = Array.isArray(raw?.workflows) ? raw!.workflows! : [];
+  return list
+    .filter((w) => w && typeof w.id === 'string' && typeof w.label === 'string')
+    .map((w) => ({
+      id: w.id,
+      label: w.label,
+      icon: w.icon,
+      desc: w.desc,
+      presets: Array.isArray(w.presets) ? w.presets : undefined,
+      items: (Array.isArray(w.items) ? w.items : [])
+        .filter((i) => i && typeof i.component === 'string')
+        .map((i) => ({
+          uid: typeof i.uid === 'string' ? i.uid : newUid(),
+          component: i.component,
+          enabled: i.enabled !== false,
+          config: i.config && typeof i.config === 'object' ? i.config : {},
+          lineup: i.lineup && typeof i.lineup === 'object' ? i.lineup : {},
+        })),
+    }));
 }
 
 export const useStore = create<State>((set, get) => {
@@ -193,6 +261,86 @@ export const useStore = create<State>((set, get) => {
     const s = get();
     if (s.themePreference === 'system') applyTheme(resolveThemeMode('system'), s.accent);
   });
+
+  /** 改流程后写回后端（合并 500ms 内的多次改动） */
+  const updateWorkflows = (fn: (list: Workflow[]) => Workflow[]) => {
+    const workflows = fn(get().workflows);
+    set({ workflows });
+    if (saveTimer) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      endpoints
+        .saveWorkflows({ version: WORKFLOWS_VERSION, workflows: get().workflows })
+        .catch((e: Error) => toast.error(`流程没保存上：${e.message}`));
+    }, 500);
+  };
+
+  const updateCurrentItems = (fn: (items: WorkflowItem[]) => WorkflowItem[]) => {
+    const wf = currentWorkflow(get());
+    if (!wf) return;
+    updateWorkflows((list) => list.map((w) => (w.id === wf.id ? { ...w, items: fn(w.items) } : w)));
+  };
+
+  /** 把一组块的开关 / 选项 / 阵容写进后端，返回要依次启动的任务名 */
+  const applyItems = async (items: WorkflowItem[]): Promise<string[]> => {
+    const s = get();
+    const catalog = s.catalog!;
+    const comps = allComponents(catalog, s.tasks);
+    const picked = items
+      .map((i) => ({ item: i, comp: comps.find((c) => c.id === i.component) }))
+      .filter((x): x is { item: WorkflowItem; comp: CatalogComponent } => !!x.comp);
+    const taskOrder: string[] = [];
+    for (const { comp } of picked) {
+      const t = s.tasks.find((x) => x.class_name === comp.task);
+      if (!t) {
+        toast.warning(`「${comp.label}」的任务 ${comp.task} 没有注册，跳过`);
+        continue;
+      }
+      if (t.trigger) continue;
+      if (!taskOrder.includes(comp.task)) taskOrder.push(comp.task);
+    }
+    const names: string[] = [];
+    for (const cls of taskOrder) {
+      let task = s.tasks.find((x) => x.class_name === cls)!;
+      const mine = picked.filter((x) => x.comp.task === cls);
+      const desired = new Map<string, unknown>();
+      // 这个任务的所有开关键：在流程里且勾了的开，其它一律关 —— 这样每个流程的设置互不干扰
+      for (const c of comps) if (c.task === cls && c.enable_key) desired.set(c.enable_key, mine.some((x) => x.comp.id === c.id));
+      for (const { item, comp } of mine) {
+        for (const key of entryOptionKeys(comp, task)) {
+          const f = fieldOf(task, key);
+          if (!f) continue;
+          desired.set(key, key in item.config ? item.config[key] : f.default !== undefined ? f.default : f.value);
+        }
+      }
+      for (const [key, value] of desired) {
+        const f = fieldOf(task, key);
+        if (!f || JSON.stringify(f.value) === JSON.stringify(value)) continue;
+        task = await endpoints.setTaskConfig(task.name, key, value);
+      }
+      names.push(task.name);
+    }
+    // 阵容：流程里每块自己的编队/助战写进全局「阵容与助战」（没单独设的写成沿用全局）
+    const lineupChanges: [string, unknown][] = [];
+    const scopesDone = new Set<string>();
+    for (const { item, comp } of picked) {
+      for (const scope of comp.lineup_scopes ?? []) {
+        if (scopesDone.has(scope)) continue;
+        scopesDone.add(scope);
+        const presetKey = `${scope}编队`;
+        const supportKey = `${scope}助战`;
+        if (lineupField(s.settings, presetKey)) {
+          const v = item.lineup[presetKey] ?? '';
+          if (String(lineupField(s.settings, presetKey)!.value ?? '') !== v) lineupChanges.push([presetKey, v]);
+        }
+        if (lineupField(s.settings, supportKey)) {
+          const v = item.lineup[supportKey] ?? SUPPORT_INHERIT;
+          if (String(lineupField(s.settings, supportKey)!.value || SUPPORT_INHERIT) !== v) lineupChanges.push([supportKey, v]);
+        }
+      }
+    }
+    if (lineupChanges.length) await get().setSettings(LINEUP_GROUP, lineupChanges);
+    return names;
+  };
 
   return {
     ready: false,
@@ -213,6 +361,9 @@ export const useStore = create<State>((set, get) => {
     screenshotError: null,
     streaming: false,
     busy: false,
+    workflows: [],
+    runningWorkflowId: null,
+    justAdded: null,
 
     async init() {
       try {
@@ -221,7 +372,12 @@ export const useStore = create<State>((set, get) => {
         set({ catalog, title: ui.title || '少前2 自动化', connectionError: null });
         document.title = ui.title || '少前2 自动化';
         await get().refreshAll();
-        set({ ready: true });
+        let workflows = normalizeWorkflows(await endpoints.getWorkflows().catch(() => null));
+        if (!workflows.length) {
+          workflows = workflowsFromTemplates(catalog);
+          endpoints.saveWorkflows({ version: WORKFLOWS_VERSION, workflows }).catch(() => {});
+        }
+        set({ workflows, ready: true });
         connectEvents(get);
         get().refreshLogs().catch(() => {});
         window.setInterval(() => {
@@ -245,7 +401,8 @@ export const useStore = create<State>((set, get) => {
     },
     async refreshStatus() {
       const status = await endpoints.status();
-      set({ status, connectionError: null });
+      const idle = !status.running || !status.current_task;
+      set({ status, connectionError: null, ...(idle && !status.starting ? { runningWorkflowId: null } : {}) });
     },
     async refreshSettings() {
       const settings = await endpoints.settings();
@@ -268,19 +425,6 @@ export const useStore = create<State>((set, get) => {
       set({ page });
       if (page === 'settings') get().refreshSettings().catch((e: Error) => toast.error(e.message));
     },
-    setWorkflow(id) {
-      get().setPrefs({ workflow: id });
-    },
-    focusedEntry: null,
-    focusEntry(id) {
-      const cur = new Set(get().prefs.expanded);
-      cur.add(id);
-      const cat = get().catalog;
-      const wf = cat ? findEntry(cat, id)?.workflow : undefined;
-      get().setPrefs({ expanded: [...cur], ...(wf ? { workflow: wf.id } : {}) });
-      set({ page: 'main', focusedEntry: id });
-      window.setTimeout(() => set({ focusedEntry: null }), 2000);
-    },
     setPrefs(patch) {
       const prefs = { ...get().prefs, ...patch };
       savePrefs(prefs);
@@ -295,7 +439,7 @@ export const useStore = create<State>((set, get) => {
     setAllExpanded(expanded) {
       const wf = currentWorkflow(get());
       if (!wf) return;
-      const mine = new Set(groupsWithLeftover(wf, get().catalog!, get().tasks).flatMap((g) => g.entries.map((e) => e.id)));
+      const mine = new Set(wf.items.map((i) => i.uid));
       const others = get().prefs.expanded.filter((id) => !mine.has(id));
       get().setPrefs({ expanded: expanded ? [...others, ...mine] : others });
     },
@@ -318,6 +462,198 @@ export const useStore = create<State>((set, get) => {
       set({ accent });
     },
 
+    // ---------- 流程（页签） ----------
+    setWorkflow(id) {
+      get().setPrefs({ workflow: id, showAddPanel: false, showPresetPanel: false });
+    },
+    addWorkflow(label, fromTemplate) {
+      const id = newUid('wf');
+      const catalog = get().catalog;
+      const tpl = fromTemplate && catalog ? catalog.templates.find((t) => t.id === fromTemplate) : undefined;
+      const wf: Workflow = tpl
+        ? { ...workflowsFromTemplates({ ...catalog!, templates: [tpl] })[0], id, label: label || tpl.label }
+        : { id, label: label || '新流程', icon: NEW_WORKFLOW_ICON, items: [] };
+      updateWorkflows((list) => [...list, wf]);
+      get().setWorkflow(id);
+      return id;
+    },
+    duplicateWorkflow(id) {
+      const src = get().workflows.find((w) => w.id === id);
+      if (!src) return id;
+      const nid = newUid('wf');
+      const copy: Workflow = {
+        ...src,
+        id: nid,
+        label: `${src.label} 副本`,
+        items: src.items.map((i) => ({ ...i, uid: newUid(), config: { ...i.config }, lineup: { ...i.lineup } })),
+      };
+      updateWorkflows((list) => {
+        const idx = list.findIndex((w) => w.id === id);
+        return [...list.slice(0, idx + 1), copy, ...list.slice(idx + 1)];
+      });
+      get().setWorkflow(nid);
+      return nid;
+    },
+    renameWorkflow(id, label) {
+      const name = label.trim();
+      if (!name) return;
+      updateWorkflows((list) => list.map((w) => (w.id === id ? { ...w, label: name } : w)));
+    },
+    setWorkflowIcon(id, icon) {
+      updateWorkflows((list) => list.map((w) => (w.id === id ? { ...w, icon } : w)));
+    },
+    moveWorkflow(id, delta) {
+      updateWorkflows((list) => {
+        const idx = list.findIndex((w) => w.id === id);
+        const to = idx + delta;
+        if (idx < 0 || to < 0 || to >= list.length) return list;
+        const next = [...list];
+        const [w] = next.splice(idx, 1);
+        next.splice(to, 0, w);
+        return next;
+      });
+    },
+    removeWorkflow(id) {
+      const list = get().workflows;
+      if (list.length <= 1) {
+        toast.error('至少要留一个流程');
+        return;
+      }
+      const idx = list.findIndex((w) => w.id === id);
+      updateWorkflows((l) => l.filter((w) => w.id !== id));
+      if (get().prefs.workflow === id) {
+        const next = get().workflows[Math.max(0, idx - 1)];
+        if (next) get().setWorkflow(next.id);
+      }
+    },
+
+    // ---------- 流程里的块 ----------
+    addItem(componentId) {
+      const wf = currentWorkflow(get());
+      if (!wf) return;
+      if (wf.items.some((i) => i.component === componentId)) {
+        toast.info('这一块已经在流程里了（同一块在一个流程里只能有一份）');
+        return;
+      }
+      const item: WorkflowItem = { uid: newUid(), component: componentId, enabled: true, config: {}, lineup: {} };
+      updateCurrentItems((items) => [...items, item]);
+      set({ justAdded: item.uid });
+      window.setTimeout(() => get().justAdded === item.uid && set({ justAdded: null }), 400);
+    },
+    removeItem(uid) {
+      updateCurrentItems((items) => items.filter((i) => i.uid !== uid));
+      get().setPrefs({ expanded: get().prefs.expanded.filter((id) => id !== uid) });
+    },
+    setItemEnabled(uid, enabled) {
+      updateCurrentItems((items) => items.map((i) => (i.uid === uid ? { ...i, enabled } : i)));
+    },
+    setItemConfig(uid, key, value) {
+      updateCurrentItems((items) => items.map((i) => (i.uid === uid ? { ...i, config: { ...i.config, [key]: value } } : i)));
+    },
+    setItemLineup(uid, changes) {
+      updateCurrentItems((items) =>
+        items.map((i) => {
+          if (i.uid !== uid) return i;
+          const lineup = { ...i.lineup };
+          for (const [k, v] of changes) {
+            if (v === null || v === '') delete lineup[k];
+            else lineup[k] = v;
+          }
+          return { ...i, lineup };
+        }),
+      );
+    },
+    resetItem(uid) {
+      updateCurrentItems((items) => items.map((i) => (i.uid === uid ? { ...i, config: {}, lineup: {} } : i)));
+      toast.success('已恢复这一块的默认值');
+    },
+    setAllEnabled(enabled) {
+      updateCurrentItems((items) => items.map((i) => ({ ...i, enabled })));
+    },
+    applyPreset(presetId) {
+      const catalog = get().catalog;
+      const preset = catalog?.presets.find((p) => p.id === presetId);
+      if (!catalog || !preset) return;
+      const want = new Set(preset.components);
+      let added = 0;
+      updateCurrentItems((items) => {
+        const next = items.map((i) => ({ ...i, enabled: want.has(i.component) }));
+        for (const c of preset.components)
+          if (!next.some((i) => i.component === c)) {
+            next.push({ uid: newUid(), component: c, enabled: true, config: {}, lineup: {} });
+            added++;
+          }
+        return next;
+      });
+      toast.success(`已应用「${preset.label}」${added ? `，补进了 ${added} 块` : ''}`);
+    },
+
+    // ---------- 运行 ----------
+    async startWorkflow() {
+      const wf = currentWorkflow(get());
+      if (!wf) return;
+      const items = wf.items.filter((i) => i.enabled);
+      if (!items.length) {
+        toast.error('这个流程里没有勾选任何块');
+        return;
+      }
+      set({ busy: true });
+      try {
+        const names = await applyItems(items);
+        if (!names.length) {
+          toast.error('没有可以启动的任务');
+          return;
+        }
+        for (const name of names) await endpoints.startTask(name);
+        set({ runningWorkflowId: wf.id });
+        toast.success(names.length > 1 ? `已启动「${wf.label}」：${names.join(' → ')}` : `已启动「${wf.label}」`);
+        await get().refreshAll();
+      } catch (err) {
+        toast.error(`启动失败：${(err as Error).message}`);
+      } finally {
+        set({ busy: false });
+      }
+    },
+    async runItem(uid) {
+      const wf = currentWorkflow(get());
+      const item = wf?.items.find((i) => i.uid === uid);
+      if (!wf || !item) return;
+      set({ busy: true });
+      try {
+        const names = await applyItems([item]);
+        for (const name of names) await endpoints.startTask(name);
+        set({ runningWorkflowId: wf.id });
+        if (names.length) toast.success(`已启动「${names[0]}」`);
+        await get().refreshAll();
+      } catch (err) {
+        toast.error(`启动失败：${(err as Error).message}`);
+      } finally {
+        set({ busy: false });
+      }
+    },
+    async stop() {
+      set({ busy: true });
+      try {
+        await endpoints.stop();
+        toast.info('已发送停止');
+        await get().refreshAll();
+      } catch (err) {
+        toast.error(`停止失败：${(err as Error).message}`);
+      } finally {
+        set({ busy: false });
+      }
+    },
+    async togglePause() {
+      try {
+        if (get().status.paused) await endpoints.resume();
+        else await endpoints.pause();
+        await get().refreshAll();
+      } catch (err) {
+        toast.error(`操作失败：${(err as Error).message}`);
+      }
+    },
+
+    // ---------- 后端直改 ----------
     async setTaskConfig(taskName, key, value) {
       try {
         const updated = await endpoints.setTaskConfig(taskName, key, value);
@@ -354,6 +690,7 @@ export const useStore = create<State>((set, get) => {
         }
       } catch (err) {
         toast.error(`保存失败：${(err as Error).message}`);
+        throw err;
       }
     },
     async resetSetting(group) {
@@ -365,86 +702,12 @@ export const useStore = create<State>((set, get) => {
         toast.error(`失败：${(err as Error).message}`);
       }
     },
-    async applyPreset(presetId) {
-      const wf = currentWorkflow(get());
-      const preset = wf?.presets?.find((p) => p.id === presetId);
-      const main = wf ? workflowTask(get(), wf) : undefined;
-      if (!wf || !preset || !main) {
-        toast.error('这个工作流的主任务没有注册');
-        return;
-      }
-      const want = new Set(preset.entries);
-      let changed = 0;
-      try {
-        for (const e of workflowEntries(wf)) {
-          const f = fieldOf(main, e.enable_key!);
-          const target = want.has(e.id);
-          if (f && !!f.value !== target) {
-            await endpoints.setTaskConfig(main.name, e.enable_key!, target);
-            changed++;
-          }
-        }
-        await get().refreshTasks();
-        toast.success(`已应用「${preset.label}」，改了 ${changed} 项`);
-      } catch (err) {
-        toast.error(`应用预设失败：${(err as Error).message}`);
-      }
-    },
-    async setAllEnabled(enabled) {
-      const wf = currentWorkflow(get());
-      const main = wf ? workflowTask(get(), wf) : undefined;
-      if (!wf || !main) return;
-      try {
-        for (const e of workflowEntries(wf)) {
-          const f = fieldOf(main, e.enable_key!);
-          if (f && !!f.value !== enabled) {
-            await endpoints.setTaskConfig(main.name, e.enable_key!, enabled);
-          }
-        }
-        await get().refreshTasks();
-      } catch (err) {
-        toast.error(`保存失败：${(err as Error).message}`);
-      }
-    },
-    async startTask(taskName) {
-      set({ busy: true });
-      try {
-        await endpoints.startTask(taskName);
-        toast.success(`已启动「${taskName}」`);
-        await get().refreshAll();
-      } catch (err) {
-        toast.error(`启动失败：${(err as Error).message}`);
-      } finally {
-        set({ busy: false });
-      }
-    },
     async taskAction(taskName, action) {
       try {
         await endpoints.taskAction(taskName, action);
         await get().refreshAll();
       } catch (err) {
         toast.error(`失败：${(err as Error).message}`);
-      }
-    },
-    async stop() {
-      set({ busy: true });
-      try {
-        await endpoints.stop();
-        toast.info('已发送停止');
-        await get().refreshAll();
-      } catch (err) {
-        toast.error(`停止失败：${(err as Error).message}`);
-      } finally {
-        set({ busy: false });
-      }
-    },
-    async togglePause() {
-      try {
-        if (get().status.paused) await endpoints.resume();
-        else await endpoints.pause();
-        await get().refreshAll();
-      } catch (err) {
-        toast.error(`操作失败：${(err as Error).message}`);
       }
     },
     async captureOnce() {
@@ -478,94 +741,84 @@ export function taskByClass(s: Pick<State, 'tasks'>, cls: string): TaskInfo | un
   return s.tasks.find((t) => t.class_name === cls);
 }
 
-/** 当前页签对应的工作流（prefs.workflow 失效时退回第一个） */
-export function currentWorkflow(s: Pick<State, 'catalog' | 'prefs'>): CatalogWorkflow | undefined {
-  const list = s.catalog?.workflows ?? [];
-  return list.find((w) => w.id === s.prefs.workflow) ?? list[0];
-}
-
-/** 工作流的主任务 */
-export function workflowTask(s: Pick<State, 'tasks'>, wf: CatalogWorkflow): TaskInfo | undefined {
-  return wf.task ? taskByClass(s, wf.task) : undefined;
-}
-
 export function fieldOf(task: TaskInfo | undefined, key: string): ConfigField | undefined {
   return task?.config.find((f) => f.key === key);
 }
 
-/** 挂在主任务下、有开关键的条目（全选 / 预设作用的范围） */
-export function workflowEntries(wf: CatalogWorkflow): CatalogEntry[] {
-  return wf.groups.flatMap((g) => g.entries).filter((e) => e.task === wf.task && !!e.enable_key);
+export function currentWorkflow(s: Pick<State, 'workflows' | 'prefs'>): Workflow | undefined {
+  return s.workflows.find((w) => w.id === s.prefs.workflow) ?? s.workflows[0];
 }
 
-export function findEntry(catalog: Catalog, id: string): { workflow: CatalogWorkflow; entry: CatalogEntry } | undefined {
-  for (const workflow of catalog.workflows)
-    for (const g of workflow.groups) for (const entry of g.entries) if (entry.id === id) return { workflow, entry };
-  return undefined;
+const UNLISTED_GROUP_ID = '_unlisted';
+
+/** 组件库分组 + 兜底：后端注册了但目录里没列的任务，自动成为「其它任务」组里的整任务块 */
+export function allGroups(catalog: Catalog, tasks: TaskInfo[]): CatalogGroup[] {
+  const listed = new Set(catalog.groups.flatMap((g) => g.components.map((c) => c.task)));
+  const unlisted = tasks.filter((t) => !listed.has(t.class_name));
+  if (!unlisted.length) return catalog.groups;
+  return [
+    ...catalog.groups,
+    {
+      id: UNLISTED_GROUP_ID,
+      label: '其它任务',
+      icon: '📦',
+      desc: '后端注册了、但目录里还没列出的任务。',
+      components: unlisted.map((t) => ({ id: `task:${t.class_name}`, label: t.name, task: t.class_name, enable_key: null, keys: '*' as const })),
+    },
+  ];
 }
 
-/** 某个任务类在哪个工作流页签里（顶栏运行指示用） */
-export function workflowOfTask(catalog: Catalog, tasks: TaskInfo[], taskName: string | null | undefined): CatalogWorkflow | undefined {
-  if (!taskName) return undefined;
-  const cls = tasks.find((t) => t.name === taskName)?.class_name;
-  if (!cls) return undefined;
-  return (
-    catalog.workflows.find((w) => w.task === cls) ??
-    catalog.workflows.find((w) => w.groups.some((g) => g.entries.some((e) => e.task === cls))) ??
-    catalog.workflows.find((w) => w.collect_unlisted)
-  );
+export function allComponents(catalog: Catalog, tasks: TaskInfo[]): CatalogComponent[] {
+  return allGroups(catalog, tasks).flatMap((g) => g.components);
 }
 
-/**
- * 工作流的分组，外加两种兜底：
- * 1. 主任务里没被任何板块 / 全局区收编的键 → 「其它选项」组，保证一项都不丢；
- * 2. collect_unlisted 的工作流把目录里没出现过的任务整个收进来。
- */
-export function groupsWithLeftover(wf: CatalogWorkflow, catalog: Catalog, tasks: TaskInfo[]): CatalogGroup[] {
-  const groups = [...wf.groups];
-  const main = wf.task ? tasks.find((t) => t.class_name === wf.task) : undefined;
-  if (main) {
-    const covered = new Set<string>();
-    for (const g of wf.groups)
-      for (const e of g.entries) {
-        if (e.task !== wf.task) continue;
-        if (e.enable_key) covered.add(e.enable_key);
-        if (e.keys === '*') main.config.forEach((f) => covered.add(f.key));
-        else e.keys.forEach((k) => covered.add(k));
-      }
-    for (const sec of catalog.global_sections) if (sec.task === wf.task) sec.keys.forEach((k) => covered.add(k));
-    const leftover = main.config.map((f) => f.key).filter((k) => !covered.has(k));
-    if (leftover.length)
-      groups.push({
-        id: `${wf.id}_other`,
-        label: '其它选项',
-        icon: '📦',
-        desc: '目录里还没归类的配置项。',
-        entries: [
-          {
-            id: `${wf.id}_other`,
-            label: '未归类的选项',
-            task: wf.task!,
-            enable_key: null,
-            keys: leftover,
-            doc: '这些键在 catalog.json 里还没分到板块，先放在这里，不会丢。',
-          },
-        ],
-      });
+export function componentById(catalog: Catalog, tasks: TaskInfo[], id: string): CatalogComponent | undefined {
+  return allComponents(catalog, tasks).find((c) => c.id === id);
+}
+
+export function groupOfComponent(catalog: Catalog, tasks: TaskInfo[], id: string): CatalogGroup | undefined {
+  return allGroups(catalog, tasks).find((g) => g.components.some((c) => c.id === id));
+}
+
+/** 流程里的块按组件库的分组排好：[分组, 该组里的块（按目录顺序）] */
+export function groupedItems(
+  wf: Workflow,
+  catalog: Catalog,
+  tasks: TaskInfo[],
+): { group: CatalogGroup; items: { item: WorkflowItem; component: CatalogComponent }[] }[] {
+  const out: { group: CatalogGroup; items: { item: WorkflowItem; component: CatalogComponent }[] }[] = [];
+  for (const group of allGroups(catalog, tasks)) {
+    const items: { item: WorkflowItem; component: CatalogComponent }[] = [];
+    for (const component of group.components) {
+      const item = wf.items.find((i) => i.component === component.id);
+      if (item) items.push({ item, component });
+    }
+    if (items.length) out.push({ group, items });
   }
-  if (wf.collect_unlisted) {
-    const listed = new Set(catalog.workflows.flatMap((w) => [w.task, ...w.groups.flatMap((g) => g.entries.map((e) => e.task))]));
-    const unlisted = tasks.filter((t) => !listed.has(t.class_name));
-    if (unlisted.length)
-      groups.push({
-        id: `${wf.id}_unlisted`,
-        label: '其它任务',
-        icon: '📦',
-        desc: '后端注册了、但目录里还没列出的任务。',
-        entries: unlisted.map((t) => ({ id: `task:${t.class_name}`, label: t.name, task: t.class_name, enable_key: null, keys: '*' })),
-      });
-  }
-  return groups;
+  return out;
+}
+
+/** 流程里引用了、但组件库里已经没有的块（目录改名后可能出现） */
+export function orphanItems(wf: Workflow, catalog: Catalog, tasks: TaskInfo[]): WorkflowItem[] {
+  const ids = new Set(allComponents(catalog, tasks).map((c) => c.id));
+  return wf.items.filter((i) => !ids.has(i.component));
+}
+
+export function presetsOf(wf: Workflow | undefined, catalog: Catalog | null): CatalogPreset[] {
+  if (!wf || !catalog || !wf.presets?.length) return [];
+  return wf.presets.map((id) => catalog.presets.find((p) => p.id === id)).filter((p): p is CatalogPreset => !!p);
+}
+
+/** 哪个流程在跑：优先记住的那个，否则按正在跑的任务反查第一个包含它的流程 */
+export function runningWorkflow(s: Pick<State, 'workflows' | 'runningWorkflowId' | 'status' | 'tasks' | 'catalog'>): Workflow | undefined {
+  const running = !!s.status.running && !!s.status.current_task;
+  if (!running) return undefined;
+  const byId = s.workflows.find((w) => w.id === s.runningWorkflowId);
+  if (byId) return byId;
+  const cls = s.tasks.find((t) => t.name === s.status.current_task)?.class_name;
+  if (!cls || !s.catalog) return undefined;
+  const comps = allComponents(s.catalog, s.tasks);
+  return s.workflows.find((w) => w.items.some((i) => i.enabled && comps.find((c) => c.id === i.component)?.task === cls));
 }
 
 /** 任务 info 里的「今日已完成 / 今日待重试」（一键日常会写，其它任务一般为空） */
@@ -579,15 +832,23 @@ export function taskProgress(task: TaskInfo | undefined): TaskProgress {
   return { done: findList('今日已完成'), retry: findList('今日待重试'), raw: info };
 }
 
-/** 条目的选项键列表（enable_key 之外的） */
-export function entryOptionKeys(entry: CatalogEntry, task: TaskInfo | undefined): string[] {
+/** 块的选项键列表（enable_key 之外的） */
+export function entryOptionKeys(component: CatalogComponent, task: TaskInfo | undefined): string[] {
   if (!task) return [];
-  if (entry.keys === '*') return task.config.map((f) => f.key).filter((k) => k !== entry.enable_key);
-  return entry.keys;
+  if (component.keys === '*') return task.config.map((f) => f.key).filter((k) => k !== component.enable_key);
+  return component.keys;
+}
+
+/** 把块在这个流程里的值套到任务字段上（没写的键用默认值），给选项编辑器用 */
+export function itemFields(item: WorkflowItem, task: TaskInfo): ConfigField[] {
+  return task.config.map((f) => ({
+    ...f,
+    value: f.key in item.config ? item.config[f.key] : f.default !== undefined ? f.default : f.value,
+  }));
 }
 
 // ---------- 阵容场景（全局「阵容与助战」里的 <场景>编队 / <场景>助战） ----------
-// 优先级：内置默认 → 全局值 → 场景单独设置；场景留空 / 「沿用全局」就继承
+// 优先级：内置默认 → 全局值 → 流程里这一块单独设置；没单独设就继承
 
 export const LINEUP_GROUP = '阵容与助战';
 export const LINEUP_PRESET = '编队名';
@@ -596,6 +857,7 @@ export const SUPPORT_INHERIT = '沿用全局';
 
 export interface ScopeState {
   scope: string;
+  /** 这一块单独设的编队（'' = 沿用） */
   preset: string;
   globalPreset: string;
   effectivePreset: string;
@@ -624,13 +886,14 @@ export function isScopeKey(settings: SettingsGroup[], key: string): boolean {
   return lineupScopes(settings).some((s) => key === `${s}编队` || key === `${s}助战`);
 }
 
-export function scopeState(settings: SettingsGroup[], scope: string): ScopeState | null {
+/** 某个场景在这一块里的生效情况；lineup 不传就是看全局本身 */
+export function scopeState(settings: SettingsGroup[], scope: string, lineup: Record<string, string> = {}): ScopeState | null {
   const presetField = lineupField(settings, `${scope}编队`);
   if (!presetField) return null;
-  const preset = String(presetField.value ?? '').trim();
+  const preset = String(lineup[`${scope}编队`] ?? '').trim();
   const globalPreset = String(lineupField(settings, LINEUP_PRESET)?.value ?? '').trim();
   const supportField = lineupField(settings, `${scope}助战`);
-  const support = supportField ? String(supportField.value || SUPPORT_INHERIT) : null;
+  const support = supportField ? String(lineup[`${scope}助战`] || SUPPORT_INHERIT) : null;
   const globalSupport = lineupField(settings, LINEUP_SUPPORT)?.value !== false;
   return {
     scope,
@@ -642,18 +905,4 @@ export function scopeState(settings: SettingsGroup[], scope: string): ScopeState
     effectiveSupport: support === null ? null : support === SUPPORT_INHERIT ? globalSupport : support === '开',
     overridden: !!preset || (support !== null && support !== SUPPORT_INHERIT),
   };
-}
-
-export function resetScopeChanges(settings: SettingsGroup[], scope: string): [string, unknown][] {
-  const changes: [string, unknown][] = [];
-  if (lineupField(settings, `${scope}编队`)) changes.push([`${scope}编队`, '']);
-  if (lineupField(settings, `${scope}助战`)) changes.push([`${scope}助战`, SUPPORT_INHERIT]);
-  return changes;
-}
-
-export function entryOfScope(catalog: Catalog, scope: string): CatalogEntry | undefined {
-  return catalog.workflows
-    .flatMap((w) => w.groups)
-    .flatMap((g) => g.entries)
-    .find((e) => (e.lineup_scopes ?? []).includes(scope));
 }

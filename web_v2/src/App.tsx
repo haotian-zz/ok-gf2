@@ -7,6 +7,7 @@ import { TopBar } from './components/TopBar';
 import { TaskList } from './components/TaskList';
 import { Toolbar } from './components/Toolbar';
 import { PresetPanel } from './components/PresetPanel';
+import { AddComponentPanel } from './components/AddComponentPanel';
 import { StatusPanel } from './components/StatusPanel';
 import { ScreenshotPanel } from './components/ScreenshotPanel';
 import { LogsPanel } from './components/LogsPanel';
@@ -104,6 +105,14 @@ export default function App() {
             >
               <div className="overflow-hidden min-h-0">
                 <PresetPanel />
+              </div>
+            </div>
+            <div
+              className="grid transition-[grid-template-rows] duration-150 ease-out"
+              style={{ gridTemplateRows: prefs.showAddPanel ? '1fr' : '0fr' }}
+            >
+              <div className="overflow-hidden min-h-0">
+                <AddComponentPanel />
               </div>
             </div>
             <Toolbar />

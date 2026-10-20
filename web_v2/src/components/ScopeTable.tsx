@@ -1,62 +1,67 @@
-/** 设置页「阵容与助战」里的各场景一览：哪些场景和全局不一样，可跳去改或恢复全局。 */
+/** 设置页「阵容与助战」里的各场景一览：哪些流程的哪些块单独设了编队 / 助战。 */
 import clsx from 'clsx';
-import { ExternalLink, RotateCcw } from 'lucide-react';
-import { LINEUP_GROUP, entryOfScope, lineupScopes, resetScopeChanges, scopeState, useStore } from '@/store';
+import { allComponents, lineupScopes, scopeState, useStore } from '@/store';
 
 export function ScopeTable() {
   const settings = useStore((s) => s.settings);
   const catalog = useStore((s) => s.catalog);
-  const setSettings = useStore((s) => s.setSettings);
-  const focusEntry = useStore((s) => s.focusEntry);
+  const tasks = useStore((s) => s.tasks);
+  const workflows = useStore((s) => s.workflows);
   const scopes = lineupScopes(settings);
-  if (!scopes.length) return null;
+  if (!scopes.length || !catalog) return null;
+  const comps = allComponents(catalog, tasks);
+
+  // 每个场景：哪些流程里的块单独设置了
+  const overrides = (scope: string) => {
+    const out: { workflow: string; block: string; preset: string; support: string | null }[] = [];
+    for (const wf of workflows)
+      for (const item of wf.items) {
+        const comp = comps.find((c) => c.id === item.component);
+        if (!comp?.lineup_scopes?.includes(scope)) continue;
+        const st = scopeState(settings, scope, item.lineup);
+        if (st?.overridden) out.push({ workflow: wf.label, block: comp.label, preset: st.preset, support: st.support === '沿用全局' ? null : st.support });
+      }
+    return out;
+  };
 
   return (
     <div className="pt-2">
       <div className="text-sm text-text-secondary">各场景单独设置</div>
-      <div className="text-xs text-text-muted mt-0.5">在任务页对应板块的「阵容」卡片里改；这里一览哪些场景和全局不一样。</div>
+      <div className="text-xs text-text-muted mt-0.5">
+        这里是全局值；每个流程里块的「阵容」卡片可以单独覆盖，只对那个流程生效。下面列出谁覆盖了。
+      </div>
       <table className="w-full mt-2 text-xs border-collapse">
         <thead>
           <tr className="text-text-muted">
             <th className="text-left font-medium px-2 py-1.5 border-b border-border">场景</th>
-            <th className="text-left font-medium px-2 py-1.5 border-b border-border">编队</th>
-            <th className="text-left font-medium px-2 py-1.5 border-b border-border">借助战</th>
-            <th className="border-b border-border" />
+            <th className="text-left font-medium px-2 py-1.5 border-b border-border">全局编队</th>
+            <th className="text-left font-medium px-2 py-1.5 border-b border-border">单独设置的流程</th>
           </tr>
         </thead>
         <tbody>
           {scopes.map((scope) => {
             const st = scopeState(settings, scope)!;
-            const entry = catalog ? entryOfScope(catalog, scope) : undefined;
+            const ov = overrides(scope);
             return (
-              <tr key={scope} className={clsx(st.overridden && 'bg-accent/5')}>
-                <td className={clsx('px-2 py-1.5 border-b border-border/60 text-text-primary', st.overridden && 'border-l-2 border-l-accent')}>{scope}</td>
-                <td className={clsx('px-2 py-1.5 border-b border-border/60', st.preset ? 'text-accent font-medium' : 'text-text-muted')}>
-                  {st.preset || `沿用（${st.globalPreset || '不切'}）`}
+              <tr key={scope} className={clsx(ov.length && 'bg-accent/5')}>
+                <td className={clsx('px-2 py-1.5 border-b border-border/60 text-text-primary align-top', ov.length && 'border-l-2 border-l-accent')}>{scope}</td>
+                <td className="px-2 py-1.5 border-b border-border/60 text-text-muted align-top">
+                  {st.globalPreset || '不切'}
+                  {st.support !== null && `，助战${st.globalSupport ? '开' : '关'}`}
                 </td>
-                <td className={clsx('px-2 py-1.5 border-b border-border/60', st.support && st.support !== '沿用全局' ? 'text-accent font-medium' : 'text-text-muted')}>
-                  {st.support === null ? '—' : st.support === '沿用全局' ? `沿用（${st.globalSupport ? '开' : '关'}）` : st.support}
-                </td>
-                <td className="px-2 py-1.5 border-b border-border/60 text-right whitespace-nowrap">
-                  {entry && (
-                    <button
-                      type="button"
-                      onClick={() => focusEntry(entry.id)}
-                      className="inline-flex items-center gap-1 text-text-muted hover:text-accent transition-colors mr-3"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      去设置
-                    </button>
-                  )}
-                  {st.overridden && (
-                    <button
-                      type="button"
-                      onClick={() => setSettings(LINEUP_GROUP, resetScopeChanges(settings, scope))}
-                      className="inline-flex items-center gap-1 text-text-muted hover:text-accent transition-colors"
-                    >
-                      <RotateCcw className="w-3 h-3" />
-                      恢复全局
-                    </button>
+                <td className="px-2 py-1.5 border-b border-border/60 align-top">
+                  {ov.length === 0 ? (
+                    <span className="text-text-muted">—</span>
+                  ) : (
+                    <div className="space-y-0.5">
+                      {ov.map((o, i) => (
+                        <div key={i} className="text-text-primary">
+                          <span className="text-accent font-medium">{o.workflow}</span> · {o.block}：
+                          {o.preset ? `编队「${o.preset}」` : '编队沿用'}
+                          {o.support ? `，助战${o.support}` : ''}
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </td>
               </tr>

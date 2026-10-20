@@ -109,17 +109,25 @@ function startRun(task) {
     }
   }, 1500);
 }
+const queue = [];
 function stopRun() {
   clearInterval(runTimer);
   runTimer = null;
   for (const t of state.tasks) { t.running = false; if (t.info) delete t.info.current_task; }
   state.status = { running: false, paused: false, starting: false, current_task: null };
+  const next = queue.shift();
+  if (next) { log('INFO', `排队的任务开始：${next.name}`); startRun(next); }
 }
+let workflowsFile = {};
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   if (p === '/api/status') return json(res, 200, state.status);
+  if (p === '/api/v2/workflows') {
+    if (req.method === 'PUT') { workflowsFile = await readBody(req); log('INFO', `保存流程 ${workflowsFile.workflows?.length ?? 0} 个`); return json(res, 200, { ok: true }); }
+    return json(res, 200, workflowsFile);
+  }
   if (p === '/api/ui/capture') return json(res, 200, { title: '少前2 自动化（mock）', event_session_key: 'mock' });
   if (p === '/api/tasks') return json(res, 200, state.tasks);
   if (p === '/api/settings') return json(res, 200, state.settings);
@@ -133,7 +141,7 @@ http.createServer(async (req, res) => {
     const task = findTask(m[1]);
     if (!task) return json(res, 404, { detail: '任务不存在' });
     const body = await readBody(req);
-    if (m[2] === 'start') { if (state.status.running) return json(res, 400, { detail: '已有任务在运行' }); startRun(task); return json(res, 200, {}); }
+    if (m[2] === 'start') { if (state.status.running) { queue.push(task); log('INFO', `queue task while another task is running ${task.name}`); return json(res, 200, {}); } startRun(task); return json(res, 200, {}); }
     if (m[2] === 'action') { if (body.action === 'enable') task.enabled = true; if (body.action === 'disable') task.enabled = false; return json(res, 200, {}); }
     if (m[2] === 'config/reset') { for (const f of task.config) f.value = f.default; return json(res, 200, {}); }
     const f = task.config.find((x) => x.key === body.key);

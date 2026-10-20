@@ -50,10 +50,12 @@ export interface ExecutorStatus {
   [k: string]: unknown;
 }
 
-export interface CatalogEntry {
+/** 组件库里的一个「块」：可以加进任意流程 */
+export interface CatalogComponent {
   id: string;
   label: string;
   task: string;
+  /** 在任务配置里的开关键；null = 整个任务就是一块 */
   enable_key: string | null;
   keys: string[] | '*';
   /** 用到的阵容场景（全局「阵容与助战」里的 <场景>编队 / <场景>助战） */
@@ -66,7 +68,7 @@ export interface CatalogGroup {
   label: string;
   icon?: string;
   desc?: string;
-  entries: CatalogEntry[];
+  components: CatalogComponent[];
 }
 
 export interface CatalogGlobalSection {
@@ -80,27 +82,50 @@ export interface CatalogPreset {
   id: string;
   label: string;
   desc?: string;
-  entries: string[];
+  components: string[];
 }
 
-/** 一个工作流 = 顶栏一个页签：主任务（底部「开始」跑它）+ 按板块分组的卡片 + 预设 */
-export interface CatalogWorkflow {
+/** 第一次打开时自动建好的默认流程 */
+export interface CatalogTemplate {
   id: string;
   label: string;
   icon?: string;
   desc?: string;
-  /** 主任务类名；null 表示这页只是一组独立任务 */
-  task: string | null;
-  start_label?: string;
-  /** 把目录里没出现的任务自动收进这页 */
-  collect_unlisted?: boolean;
-  groups: CatalogGroup[];
-  presets?: CatalogPreset[];
+  components: string[];
+  presets?: string[];
 }
 
 export interface Catalog {
-  workflows: CatalogWorkflow[];
+  groups: CatalogGroup[];
+  templates: CatalogTemplate[];
+  presets: CatalogPreset[];
   global_sections: CatalogGlobalSection[];
+}
+
+// ---------- 用户自己拼的流程（页签），存在后端 configs/workflows.json ----------
+
+export interface WorkflowItem {
+  uid: string;
+  component: string;
+  enabled: boolean;
+  /** 这一块在这个流程里的选项值（没写的键用任务默认值） */
+  config: Record<string, unknown>;
+  /** 这一块在这个流程里的阵容：<场景>编队 / <场景>助战（没写 = 沿用全局） */
+  lineup: Record<string, string>;
+}
+
+export interface Workflow {
+  id: string;
+  label: string;
+  icon?: string;
+  desc?: string;
+  presets?: string[];
+  items: WorkflowItem[];
+}
+
+export interface WorkflowsFile {
+  version: number;
+  workflows: Workflow[];
 }
 
 export class ApiError extends Error {}
@@ -156,6 +181,8 @@ export const endpoints = {
   resume: () => api.post<unknown>('/api/executor/resume'),
   stop: () => api.post<unknown>('/api/executor/stop-task'),
   capture: () => api.post<{ resource_url?: string }>('/api/tools/capture'),
+  getWorkflows: () => api.get<Partial<WorkflowsFile> | null>('/api/v2/workflows'),
+  saveWorkflows: (data: WorkflowsFile) => request<unknown>('PUT', '/api/v2/workflows', data),
 };
 
 export function eventsUrl(sessionKey: string): string {
