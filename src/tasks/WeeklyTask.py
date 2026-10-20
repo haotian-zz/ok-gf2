@@ -96,6 +96,11 @@ class WeeklyTask(BaseGfTask):
         self.wait_click_ocr(match=re.compile("模拟作战"), box="top_right", raise_if_not_found=True, after_sleep=2)
         self.wait_click_ocr(match=re.compile("扩编实练"), raise_if_not_found=True, after_sleep=2)
         self.wait_pop_up(count=1)
+        if self.ocr(match=re.compile("扩编实练已结束")):
+            self.log_info("本期扩编实练已结束，跳过")
+            self.wait_click_ocr(match=re.compile("^确认$"), box="bottom", time_out=3, after_sleep=2)
+            self.ensure_main()
+            return
         # 特殊增强是部署关：进部署界面后按「扩编实练编队」切整备室编队并补满
         self.set_lineup_kind("扩编实练")
         try:
@@ -103,6 +108,10 @@ class WeeklyTask(BaseGfTask):
                 if self._deep_stars_full():
                     break
                 card = self._deep_frontier_card()
+                if self.ocr(match=re.compile("扩编实练已结束")):
+                    self.log_info("本期扩编实练已结束")
+                    self.wait_click_ocr(match=re.compile("^确认$"), box="bottom", time_out=3, after_sleep=2)
+                    break
                 if card is None:
                     self.log_info("扩编实练没有已解锁的特殊增强关卡，结束")
                     break

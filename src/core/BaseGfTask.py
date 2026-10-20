@@ -1484,6 +1484,11 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                         return False
             self.click(box, after_sleep=2)
             return False
+        # 「本期扩编实练已结束」这类只有「确认」的通知框挡着，点回主页按钮没用
+        if self.ocr(box=self.box.center, match=re.compile("已结束$")):
+            if confirm := self.ocr(box=self.box.bottom, match=re.compile("^确认$")):
+                self.click(confirm, after_sleep=2)
+                return False
         # 停在战斗部署界面时 ESC 只会弹出/关掉关卡信息菜单，回不去；菜单里有「退出作战」就点它（后面的确认框走上面的离开确认）
         if quit_box := self.ocr(box=self.box.bottom_left, match=re.compile("^退出作战$")):
             if self.ocr(box=self.box.bottom_right, match=re.compile("^继续作战$")):
