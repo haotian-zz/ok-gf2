@@ -36,7 +36,9 @@ class WeeklyTask(BaseGfTask):
         self.info_set("current_task", "boss_fast")
         self.wait_click_ocr(match=re.compile("战役推进"), box="top_right", after_sleep=0.5, raise_if_not_found=True)
         self.wait_click_ocr(match=re.compile("模拟作战"), box="top_right", raise_if_not_found=True)
-        self.wait_click_ocr(match=re.compile("首领挑战"), raise_if_not_found=True)
+        self.wait_click_ocr(match=re.compile("首领挑战"), raise_if_not_found=True, after_sleep=2)
+        # 页面会记住上次的标签，停在「歧路挑战」（50 级解锁）时没有自律按钮，先切回「常规挑战」
+        self.wait_click_ocr(match=re.compile("常规挑战"), box="top_right", time_out=3, after_sleep=1)
         self.fast_combat(set_cost=1, click_all=True)
         self.ensure_main()
 
