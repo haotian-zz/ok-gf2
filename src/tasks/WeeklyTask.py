@@ -1,5 +1,6 @@
 import re
 
+import cv2
 from ok import Logger
 
 from src.core.BaseGfTask import BaseGfTask, stamina_re
@@ -64,6 +65,9 @@ class WeeklyTask(BaseGfTask):
             if temp:
                 self.click(temp[0], after_sleep=2)
                 self.click(temp[0], after_sleep=2)
+                if not self._tab_selected(re.compile("极限峰值")):
+                    self.log_info("极限峰值未解锁，跳过")
+                    break
                 if attempt == 0:
                     self.wait_pop_up(count=1)
                 for i in range(max_retry):
@@ -112,3 +116,17 @@ class WeeklyTask(BaseGfTask):
                         if result := self.ocr(match="一键领取", frame_processor=self.make_hsv_isolator(hR.WHITE)):
                             self.click(result[0], after_sleep=2)
         self.ensure_main()
+
+    def _tab_selected(self, match):
+        """右下角标签：选中是蓝绿底（饱和度高），未选中/未解锁是浅灰底；找不到标签按选中处理，走原流程。"""
+        self.next_frame()
+        boxes = self.ocr(box="bottom_right", match=match)
+        if not boxes or self.frame is None:
+            return True
+        b = boxes[0]
+        region = self.frame[int(b.y):int(b.y + b.height), int(b.x):int(b.x + b.width)]
+        if region.size == 0:
+            return True
+        sat = float(cv2.cvtColor(region, cv2.COLOR_BGR2HSV)[..., 1].mean())
+        self.log_info(f"{b.name} 标签饱和度 {round(sat)}", notify=False)
+        return sat > 50
