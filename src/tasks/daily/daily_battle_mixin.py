@@ -9,6 +9,12 @@ from src.core.lineup_config import preset_name_for_kind, support_enabled_for_kin
 
 OUTPOST_KIND = "尘烟前哨战"
 power_re = re.compile(r"^\d{3,6}$")
+# 班组助战弹窗里战力前面有个图标，实录 OCR 成「心25850」
+support_power_re = re.compile(r"^\D?\d{4,6}$")
+
+
+def power_of(box):
+    return int(re.sub(r"\D", "", box.name))
 # 前哨战编队界面右下「阵容」：我方格子在左，最右一格是班组助战（关掉助战开关时也是我方格子）
 OUTPOST_OWN_SLOTS = (0.61, 0.69, 0.87, 0.83)
 OUTPOST_SUPPORT_SLOT = (0.87, 0.69, 0.97, 0.83)
@@ -367,7 +373,7 @@ class DailyBattleMixin:
                 break
             self.click_box(filled[0], after_sleep=0.5)
         cards = self.ocr(box=self.box_of_screen(0.02, 0.37, 0.53, 0.9), match=power_re)
-        cards.sort(key=lambda b: int(b.name), reverse=True)
+        cards.sort(key=power_of, reverse=True)
         picked = []
         for card in cards:
             if len(picked) >= slots:
@@ -412,8 +418,8 @@ class DailyBattleMixin:
         if not self.wait_ocr(match="班组助战", box=popup_title, time_out=5):
             self.log_info("班组助战弹窗没打开，不借助战")
             return False
-        cards = self.ocr(box=self.box_of_screen(0.18, 0.28, 0.83, 0.74), match=re.compile(r"^\d{4,6}$"))
-        cards.sort(key=lambda b: int(b.name), reverse=True)
+        cards = self.ocr(box=self.box_of_screen(0.18, 0.28, 0.83, 0.74), match=support_power_re, log=True)
+        cards.sort(key=power_of, reverse=True)
         for card in cards[:3]:
             # 点头像会打开人形详情，点战力数字（卡片正文）才是选中
             self.click_box(card, after_sleep=1)
@@ -421,9 +427,9 @@ class DailyBattleMixin:
                                 time_out=2, after_sleep=1.5)
             self.next_frame()
             if not self.ocr(match="班组助战", box=popup_title):
-                self.log_info(f"前哨战借班组助战：战力 {card.name}", notify=True)
+                self.log_info(f"前哨战借班组助战：战力 {power_of(card)}", notify=True)
                 return True
-            self.log_info(f"战力 {card.name} 的助战没借上，换下一个")
+            self.log_info(f"战力 {power_of(card)} 的助战没借上，换下一个")
         self.debug_shot("chenyan_outpost_support_fail")
         self.click_relative(0.813, 0.178, after_sleep=1)
         self.log_info("班组助战没借上，关掉弹窗不借", notify=True)

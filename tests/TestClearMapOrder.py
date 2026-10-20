@@ -308,6 +308,17 @@ class TestOutpostPresetName(unittest.TestCase):
         self.assertTrue(m("尘烟", "尘烟队"))
         self.assertTrue(m("I尘烟队", "尘烟队"))
 
+    def test_support_power_ocr(self):
+        from ok import Box
+
+        from src.tasks.daily.daily_battle_mixin import power_of, support_power_re
+
+        # 实录：班组助战弹窗 OCR 结果
+        names = ["海鲜羊", "可露凯", "6", "心25850", "心24871", "LV.60", "V.60", "心18925", "25718"]
+        hits = [n for n in names if support_power_re.match(n)]
+        self.assertEqual(hits, ["心25850", "心24871", "心18925", "25718"])
+        self.assertEqual(power_of(Box(0, 0, 1, 1, name="心25850")), 25850)
+
 class TestZilvLocked(unittest.TestCase):
     def test_gray_gap_rule(self):
         from src.core.BaseGfTask import zilv_locked
