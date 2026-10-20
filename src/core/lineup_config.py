@@ -30,6 +30,7 @@ SCOPES = [
     {"name": "班组", "support": False, "desc": "一键日常「班组」要务"},
     {"name": "尘烟前哨战", "support": True, "desc": "一键日常「班组」里的尘烟前线·前哨战（借助战时选战力最高的人形）"},
     {"name": "活动", "support": False, "desc": "一键日常「活动自律」"},
+    {"name": "扩编实练", "support": False, "desc": "周常「扩编实练」特殊增强关卡"},
 ]
 SCOPE_BY_NAME = {s["name"]: s for s in SCOPES}
 DEFAULT_SCOPE = "推图"
@@ -85,7 +86,7 @@ lineup_option = ConfigOption(
 
 
 def preset_name_for_kind(cfg, kind):
-    """kind（竞技场/体力本/班组/尘烟前哨战/活动/None=推图）对应的编队名；该场景没填就退回「编队名」。"""
+    """kind（竞技场/体力本/班组/尘烟前哨战/活动/扩编实练/None=推图）对应的编队名；该场景没填就退回「编队名」。"""
     name = (cfg.get(preset_key(scope_of_kind(kind))) or "").strip()
     return name or (cfg.get(KEY_PRESET) or "").strip()
 

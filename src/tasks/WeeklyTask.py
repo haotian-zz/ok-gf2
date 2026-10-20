@@ -20,11 +20,12 @@ class WeeklyTask(BaseGfTask):
             {
                 "首领挑战": True,
                 "峰值推定": True,
-                "扩编实练": False,
+                "扩编实练": True,
             }
         )
 
     def run(self):
+        self.reset_lineup(None)
         self.ensure_main(recheck_time=2, time_out=90)
         tasks = [("首领挑战", self.boss_fast), ("峰值推定", self.peak_estimate_tion), ("扩编实练", self.deep_battle)]
         for key, func in tasks:
@@ -100,6 +101,8 @@ class WeeklyTask(BaseGfTask):
                 results = self.wait_ocr(match="特殊增强", settle_time=2, log=True)
         # results = self.wait_ocr(match="特殊增强", settle_time=2, log=True)
         if results:
+            # 扩编实练是部署关：进部署界面后按「扩编实练编队」切整备室编队并补满
+            self.set_lineup_kind("扩编实练")
             one_bool = False
             for result in results:
                 self.click(result, after_sleep=2)
@@ -115,6 +118,7 @@ class WeeklyTask(BaseGfTask):
                     if self.wait_click_ocr(match="当期实练奖励", box="bottom_right", after_sleep=2):
                         if result := self.ocr(match="一键领取", frame_processor=self.make_hsv_isolator(hR.WHITE)):
                             self.click(result[0], after_sleep=2)
+        self.set_lineup_kind(None)
         self.ensure_main()
 
     def _tab_selected(self, match):
