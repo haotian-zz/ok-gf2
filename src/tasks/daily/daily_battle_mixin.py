@@ -1,4 +1,4 @@
-"""战斗与班组：体力本、竞技场、兵棋推演、班组尘烟。"""
+"""战斗与班组：体力本、竞技场、班组尘烟。（国服模拟作战里没有兵棋推演，旧的 bingqi 已删）"""
 
 import re
 
@@ -184,31 +184,6 @@ class DailyBattleMixin:
                 return challenged
             self.wait_click_ocr(match="刷新", box=self.box.bottom_right, after_sleep=2, raise_if_not_found=True)
         return challenged
-
-    def bingqi(self):
-        if self.config.get("自主循环"):
-            self.ensure_main()
-            return
-        self.info_set("current_task", "bingqi")
-        self.wait_click_ocr(
-            match=re.compile("战役推进"), box=self.box.top_right, after_sleep=1, raise_if_not_found=True
-        )
-        self.wait_ocr(match=re.compile("补给作战"), box=self.box.top_right, raise_if_not_found=True)
-        self.sleep(1)
-        self.click_relative(0.90, 0.05, after_sleep=0.95)  # 补给
-        self.click_relative(0.98, 0.49, after_sleep=0.52)
-        self.wait_ocr(
-            match="防御阵容",
-            box=self.box.right,
-            time_out=30,
-            post_action=lambda: self.click_relative(0.5, 0.5, after_sleep=2),
-        )
-        while self.find_top_right_count():
-            self.info_incr("bingqi")
-            self.wait_click_ocr(match=["匹配"], box=self.box.bottom, after_sleep=0.5, raise_if_not_found=True)
-            self.auto_battle(end_match="匹配")
-            self.sleep(2)
-        self.ensure_main()
 
     def guild(self):
         self.info_set("current_task", "guild")
