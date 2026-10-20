@@ -6,6 +6,7 @@ import {
   type Catalog,
   type CatalogEntry,
   type CatalogGroup,
+  type CatalogWorkflow,
   type ConfigField,
   type ExecutorStatus,
   type SettingsGroup,
@@ -28,13 +29,14 @@ export interface LogLine {
   message: string;
 }
 
-export interface DailyInfo {
+export interface TaskProgress {
   done: string[];
   retry: string[];
   raw: Record<string, unknown>;
 }
 
 interface UiPrefs {
+  workflow: string;
   expanded: string[];
   collapsedGroups: string[];
   rightPanelWidth: number;
@@ -48,6 +50,7 @@ const PREFS_KEY = 'okgf2.ui';
 
 function loadPrefs(): UiPrefs {
   const base: UiPrefs = {
+    workflow: 'daily',
     expanded: [],
     collapsedGroups: [],
     rightPanelWidth: 380,
@@ -124,7 +127,8 @@ interface State {
   clearLogs: () => void;
 
   setPage: (p: Page) => void;
-  /** 从设置页跳到任务页并展开某一项 */
+  setWorkflow: (id: string) => void;
+  /** 从设置页跳到任务页、切到对应工作流并展开某一项 */
   focusEntry: (id: string) => void;
   focusedEntry: string | null;
   setPrefs: (patch: Partial<UiPrefs>) => void;
@@ -264,11 +268,16 @@ export const useStore = create<State>((set, get) => {
       set({ page });
       if (page === 'settings') get().refreshSettings().catch((e: Error) => toast.error(e.message));
     },
+    setWorkflow(id) {
+      get().setPrefs({ workflow: id });
+    },
     focusedEntry: null,
     focusEntry(id) {
       const cur = new Set(get().prefs.expanded);
       cur.add(id);
-      get().setPrefs({ expanded: [...cur] });
+      const cat = get().catalog;
+      const wf = cat ? findEntry(cat, id)?.workflow : undefined;
+      get().setPrefs({ expanded: [...cur], ...(wf ? { workflow: wf.id } : {}) });
       set({ page: 'main', focusedEntry: id });
       window.setTimeout(() => set({ focusedEntry: null }), 2000);
     },
@@ -284,11 +293,11 @@ export const useStore = create<State>((set, get) => {
       get().setPrefs({ expanded: [...cur] });
     },
     setAllExpanded(expanded) {
-      const cat = get().catalog;
-      if (!cat) return;
-      get().setPrefs({
-        expanded: expanded ? cat.groups.flatMap((g) => g.entries.map((e) => e.id)) : [],
-      });
+      const wf = currentWorkflow(get());
+      if (!wf) return;
+      const mine = new Set(groupsWithLeftover(wf, get().catalog!, get().tasks).flatMap((g) => g.entries.map((e) => e.id)));
+      const others = get().prefs.expanded.filter((id) => !mine.has(id));
+      get().setPrefs({ expanded: expanded ? [...others, ...mine] : others });
     },
     toggleGroupCollapsed(id) {
       const cur = new Set(get().prefs.collapsedGroups);
@@ -357,22 +366,21 @@ export const useStore = create<State>((set, get) => {
       }
     },
     async applyPreset(presetId) {
-      const { catalog } = get();
-      if (!catalog) return;
-      const preset = catalog.presets.find((p) => p.id === presetId);
-      const daily = dailyTask(get());
-      if (!preset || !daily) {
-        toast.error('一键日常任务没有注册');
+      const wf = currentWorkflow(get());
+      const preset = wf?.presets?.find((p) => p.id === presetId);
+      const main = wf ? workflowTask(get(), wf) : undefined;
+      if (!wf || !preset || !main) {
+        toast.error('这个工作流的主任务没有注册');
         return;
       }
       const want = new Set(preset.entries);
       let changed = 0;
       try {
-        for (const e of dailyEntries(catalog)) {
-          const f = fieldOf(daily, e.enable_key!);
+        for (const e of workflowEntries(wf)) {
+          const f = fieldOf(main, e.enable_key!);
           const target = want.has(e.id);
           if (f && !!f.value !== target) {
-            await endpoints.setTaskConfig(daily.name, e.enable_key!, target);
+            await endpoints.setTaskConfig(main.name, e.enable_key!, target);
             changed++;
           }
         }
@@ -383,14 +391,14 @@ export const useStore = create<State>((set, get) => {
       }
     },
     async setAllEnabled(enabled) {
-      const { catalog } = get();
-      const daily = dailyTask(get());
-      if (!catalog || !daily) return;
+      const wf = currentWorkflow(get());
+      const main = wf ? workflowTask(get(), wf) : undefined;
+      if (!wf || !main) return;
       try {
-        for (const e of dailyEntries(catalog)) {
-          const f = fieldOf(daily, e.enable_key!);
+        for (const e of workflowEntries(wf)) {
+          const f = fieldOf(main, e.enable_key!);
           if (f && !!f.value !== enabled) {
-            await endpoints.setTaskConfig(daily.name, e.enable_key!, enabled);
+            await endpoints.setTaskConfig(main.name, e.enable_key!, enabled);
           }
         }
         await get().refreshTasks();
@@ -470,61 +478,99 @@ export function taskByClass(s: Pick<State, 'tasks'>, cls: string): TaskInfo | un
   return s.tasks.find((t) => t.class_name === cls);
 }
 
-export function dailyTask(s: Pick<State, 'tasks' | 'catalog'>): TaskInfo | undefined {
-  return s.catalog ? taskByClass(s, s.catalog.daily_task) : undefined;
+/** 当前页签对应的工作流（prefs.workflow 失效时退回第一个） */
+export function currentWorkflow(s: Pick<State, 'catalog' | 'prefs'>): CatalogWorkflow | undefined {
+  const list = s.catalog?.workflows ?? [];
+  return list.find((w) => w.id === s.prefs.workflow) ?? list[0];
+}
+
+/** 工作流的主任务 */
+export function workflowTask(s: Pick<State, 'tasks'>, wf: CatalogWorkflow): TaskInfo | undefined {
+  return wf.task ? taskByClass(s, wf.task) : undefined;
 }
 
 export function fieldOf(task: TaskInfo | undefined, key: string): ConfigField | undefined {
   return task?.config.find((f) => f.key === key);
 }
 
-/** 挂在一键日常下、有开关键的条目 */
-export function dailyEntries(catalog: Catalog): CatalogEntry[] {
-  return catalog.groups
-    .flatMap((g) => g.entries)
-    .filter((e) => e.task === catalog.daily_task && !!e.enable_key);
+/** 挂在主任务下、有开关键的条目（全选 / 预设作用的范围） */
+export function workflowEntries(wf: CatalogWorkflow): CatalogEntry[] {
+  return wf.groups.flatMap((g) => g.entries).filter((e) => e.task === wf.task && !!e.enable_key);
 }
 
-/** 日常任务里没被任何板块/全局区收编的键，自动收进「其它」组，保证一项都不丢 */
-export function groupsWithLeftover(catalog: Catalog, tasks: TaskInfo[]): CatalogGroup[] {
-  const daily = tasks.find((t) => t.class_name === catalog.daily_task);
-  const groups = catalog.groups.filter((g) => g.id !== '_other');
-  if (!daily) return groups;
-  const covered = new Set<string>();
-  for (const g of catalog.groups)
-    for (const e of g.entries) {
-      if (e.task !== catalog.daily_task) continue;
-      if (e.enable_key) covered.add(e.enable_key);
-      if (Array.isArray(e.keys)) e.keys.forEach((k) => covered.add(k));
-    }
-  for (const s of catalog.global_sections)
-    if (s.task === catalog.daily_task) s.keys.forEach((k) => covered.add(k));
-  const leftover = daily.config.map((f) => f.key).filter((k) => !covered.has(k));
-  if (!leftover.length) return groups;
-  return [
-    ...groups,
-    {
-      id: '_other',
-      label: '其它日常选项',
-      icon: '📦',
-      desc: '目录里还没归类的日常配置项。',
-      entries: [
-        {
-          id: '_other',
-          label: '未归类的选项',
-          task: catalog.daily_task,
-          enable_key: null,
-          keys: leftover,
-          doc: '这些键在 catalog.json 里还没分到板块，先放在这里，不会丢。',
-        },
-      ],
-    },
-  ];
+export function findEntry(catalog: Catalog, id: string): { workflow: CatalogWorkflow; entry: CatalogEntry } | undefined {
+  for (const workflow of catalog.workflows)
+    for (const g of workflow.groups) for (const entry of g.entries) if (entry.id === id) return { workflow, entry };
+  return undefined;
 }
 
-export function dailyInfo(s: Pick<State, 'tasks' | 'catalog'>): DailyInfo {
-  const daily = dailyTask(s);
-  const info = (daily?.info ?? {}) as Record<string, unknown>;
+/** 某个任务类在哪个工作流页签里（顶栏运行指示用） */
+export function workflowOfTask(catalog: Catalog, tasks: TaskInfo[], taskName: string | null | undefined): CatalogWorkflow | undefined {
+  if (!taskName) return undefined;
+  const cls = tasks.find((t) => t.name === taskName)?.class_name;
+  if (!cls) return undefined;
+  return (
+    catalog.workflows.find((w) => w.task === cls) ??
+    catalog.workflows.find((w) => w.groups.some((g) => g.entries.some((e) => e.task === cls))) ??
+    catalog.workflows.find((w) => w.collect_unlisted)
+  );
+}
+
+/**
+ * 工作流的分组，外加两种兜底：
+ * 1. 主任务里没被任何板块 / 全局区收编的键 → 「其它选项」组，保证一项都不丢；
+ * 2. collect_unlisted 的工作流把目录里没出现过的任务整个收进来。
+ */
+export function groupsWithLeftover(wf: CatalogWorkflow, catalog: Catalog, tasks: TaskInfo[]): CatalogGroup[] {
+  const groups = [...wf.groups];
+  const main = wf.task ? tasks.find((t) => t.class_name === wf.task) : undefined;
+  if (main) {
+    const covered = new Set<string>();
+    for (const g of wf.groups)
+      for (const e of g.entries) {
+        if (e.task !== wf.task) continue;
+        if (e.enable_key) covered.add(e.enable_key);
+        if (e.keys === '*') main.config.forEach((f) => covered.add(f.key));
+        else e.keys.forEach((k) => covered.add(k));
+      }
+    for (const sec of catalog.global_sections) if (sec.task === wf.task) sec.keys.forEach((k) => covered.add(k));
+    const leftover = main.config.map((f) => f.key).filter((k) => !covered.has(k));
+    if (leftover.length)
+      groups.push({
+        id: `${wf.id}_other`,
+        label: '其它选项',
+        icon: '📦',
+        desc: '目录里还没归类的配置项。',
+        entries: [
+          {
+            id: `${wf.id}_other`,
+            label: '未归类的选项',
+            task: wf.task!,
+            enable_key: null,
+            keys: leftover,
+            doc: '这些键在 catalog.json 里还没分到板块，先放在这里，不会丢。',
+          },
+        ],
+      });
+  }
+  if (wf.collect_unlisted) {
+    const listed = new Set(catalog.workflows.flatMap((w) => [w.task, ...w.groups.flatMap((g) => g.entries.map((e) => e.task))]));
+    const unlisted = tasks.filter((t) => !listed.has(t.class_name));
+    if (unlisted.length)
+      groups.push({
+        id: `${wf.id}_unlisted`,
+        label: '其它任务',
+        icon: '📦',
+        desc: '后端注册了、但目录里还没列出的任务。',
+        entries: unlisted.map((t) => ({ id: `task:${t.class_name}`, label: t.name, task: t.class_name, enable_key: null, keys: '*' })),
+      });
+  }
+  return groups;
+}
+
+/** 任务 info 里的「今日已完成 / 今日待重试」（一键日常会写，其它任务一般为空） */
+export function taskProgress(task: TaskInfo | undefined): TaskProgress {
+  const info = (task?.info ?? {}) as Record<string, unknown>;
   const findList = (needle: string): string[] => {
     const k = Object.keys(info).find((x) => x.includes(needle));
     const v = k ? info[k] : undefined;
@@ -606,5 +652,8 @@ export function resetScopeChanges(settings: SettingsGroup[], scope: string): [st
 }
 
 export function entryOfScope(catalog: Catalog, scope: string): CatalogEntry | undefined {
-  return catalog.groups.flatMap((g) => g.entries).find((e) => (e.lineup_scopes ?? []).includes(scope));
+  return catalog.workflows
+    .flatMap((w) => w.groups)
+    .flatMap((g) => g.entries)
+    .find((e) => (e.lineup_scopes ?? []).includes(scope));
 }

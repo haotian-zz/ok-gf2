@@ -1,16 +1,19 @@
 /** 一键预设面板（沿用 MXU PresetSelector 的卡片样式）。 */
 import { Loader2, Sparkles, X } from 'lucide-react';
 import { useState } from 'react';
-import { dailyEntries, useStore } from '@/store';
+import { currentWorkflow, useStore, workflowEntries } from '@/store';
 
 export function PresetPanel() {
   const catalog = useStore((s) => s.catalog);
+  const prefs = useStore((s) => s.prefs);
   const applyPreset = useStore((s) => s.applyPreset);
   const setPrefs = useStore((s) => s.setPrefs);
   const status = useStore((s) => s.status);
   const [applying, setApplying] = useState<string | null>(null);
-  if (!catalog) return null;
-  const total = dailyEntries(catalog).length;
+  const wf = currentWorkflow({ catalog, prefs });
+  const presets = wf?.presets ?? [];
+  if (!wf || !presets.length) return null;
+  const total = workflowEntries(wf).length;
   const running = !!status.running && !!status.current_task;
 
   return (
@@ -27,7 +30,7 @@ export function PresetPanel() {
         </button>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3">
-        {catalog.presets.map((p) => (
+        {presets.map((p) => (
           <button
             key={p.id}
             type="button"

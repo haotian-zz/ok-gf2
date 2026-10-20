@@ -1,17 +1,19 @@
-/** 按游戏板块分组的任务列表。 */
+/** 当前工作流的任务列表，按游戏板块分组。 */
 import clsx from 'clsx';
 import { ChevronDown, ListTodo } from 'lucide-react';
-import { groupsWithLeftover, useStore } from '@/store';
+import { currentWorkflow, groupsWithLeftover, useStore } from '@/store';
 import { TaskItem } from './TaskItem';
 import { Tooltip } from './ui/Tooltip';
 
 export function TaskList() {
   const catalog = useStore((s) => s.catalog);
   const tasks = useStore((s) => s.tasks);
-  const collapsed = useStore((s) => s.prefs.collapsedGroups);
+  const prefs = useStore((s) => s.prefs);
+  const collapsed = prefs.collapsedGroups;
   const toggleGroup = useStore((s) => s.toggleGroupCollapsed);
+  const wf = currentWorkflow({ catalog, prefs });
 
-  if (!catalog) {
+  if (!catalog || !wf) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-text-muted gap-3">
         <ListTodo className="w-12 h-12 opacity-30" />
@@ -20,18 +22,23 @@ export function TaskList() {
     );
   }
 
-  const groups = groupsWithLeftover(catalog, tasks);
+  const groups = groupsWithLeftover(wf, catalog, tasks);
 
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden p-3">
-      <div className="space-y-3">
+      <div key={wf.id} className="space-y-3 animate-fade-in">
+        {wf.desc && <p className="px-1 text-xs text-text-muted">{wf.desc}</p>}
         {groups.map((g) => {
           const isCollapsed = collapsed.includes(g.id);
-          const enabledCount = g.entries.filter((e) => {
+          // 只数有开关的卡（子项开关 / 触发任务），纯选项卡和独立任务不算
+          const togglable = g.entries.filter((e) => {
             const t = tasks.find((x) => x.class_name === e.task);
-            if (!t) return false;
+            return !!t && (!!e.enable_key || !!t.trigger);
+          });
+          const enabledCount = togglable.filter((e) => {
+            const t = tasks.find((x) => x.class_name === e.task)!;
             if (e.enable_key) return !!t.config.find((f) => f.key === e.enable_key)?.value;
-            return t.trigger ? t.enabled : false;
+            return t.enabled;
           }).length;
           return (
             <section key={g.id}>
@@ -43,9 +50,11 @@ export function TaskList() {
                 >
                   <span className="text-base leading-none w-5 text-center">{g.icon}</span>
                   <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">{g.label}</span>
-                  <span className="text-[11px] text-text-muted">
-                    {enabledCount}/{g.entries.length}
-                  </span>
+                  {togglable.length > 0 && (
+                    <span className="text-[11px] text-text-muted">
+                      {enabledCount}/{togglable.length}
+                    </span>
+                  )}
                   <span className="flex-1 h-px bg-border mx-1" />
                   <ChevronDown
                     className={clsx(
@@ -62,7 +71,7 @@ export function TaskList() {
                 <div className={clsx('min-h-0', isCollapsed ? 'overflow-hidden' : 'overflow-visible')}>
                   <div className="space-y-2">
                     {g.entries.map((e) => (
-                      <TaskItem key={e.id} entry={e} task={tasks.find((t) => t.class_name === e.task)} />
+                      <TaskItem key={e.id} workflow={wf} entry={e} task={tasks.find((t) => t.class_name === e.task)} />
                     ))}
                   </div>
                 </div>

@@ -83,11 +83,24 @@ export interface CatalogPreset {
   entries: string[];
 }
 
-export interface Catalog {
-  daily_task: string;
-  global_sections: CatalogGlobalSection[];
-  presets: CatalogPreset[];
+/** 一个工作流 = 顶栏一个页签：主任务（底部「开始」跑它）+ 按板块分组的卡片 + 预设 */
+export interface CatalogWorkflow {
+  id: string;
+  label: string;
+  icon?: string;
+  desc?: string;
+  /** 主任务类名；null 表示这页只是一组独立任务 */
+  task: string | null;
+  start_label?: string;
+  /** 把目录里没出现的任务自动收进这页 */
+  collect_unlisted?: boolean;
   groups: CatalogGroup[];
+  presets?: CatalogPreset[];
+}
+
+export interface Catalog {
+  workflows: CatalogWorkflow[];
+  global_sections: CatalogGlobalSection[];
 }
 
 export class ApiError extends Error {}

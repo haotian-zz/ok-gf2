@@ -1,9 +1,9 @@
 /** 任务卡片：沿用 MXU TaskItem 的结构（复选框 + 名称 + 选项预览 + 展开面板）。 */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { ChevronRight, Play, RotateCcw, Zap, ZapOff } from 'lucide-react';
-import type { CatalogEntry, ConfigField, TaskInfo } from '@/api';
-import { dailyInfo, entryOptionKeys, fieldOf, useStore } from '@/store';
+import { ChevronRight, Play, RotateCcw, SlidersHorizontal, Zap, ZapOff } from 'lucide-react';
+import type { CatalogEntry, CatalogWorkflow, ConfigField, TaskInfo } from '@/api';
+import { entryOptionKeys, fieldOf, taskProgress, useStore } from '@/store';
 import { Checkbox } from './ui/Checkbox';
 import { ConfirmDialog } from './ui/Modal';
 import { OptionList } from './OptionEditor';
@@ -43,8 +43,15 @@ function PreviewTag({ field }: { field: ConfigField }) {
   );
 }
 
-export function TaskItem({ entry, task }: { entry: CatalogEntry; task: TaskInfo | undefined }) {
-  const catalog = useStore((s) => s.catalog)!;
+export function TaskItem({
+  workflow,
+  entry,
+  task,
+}: {
+  workflow: CatalogWorkflow;
+  entry: CatalogEntry;
+  task: TaskInfo | undefined;
+}) {
   const expanded = useStore((s) => s.prefs.expanded.includes(entry.id));
   const toggleExpanded = useStore((s) => s.toggleExpanded);
   const setTaskConfig = useStore((s) => s.setTaskConfig);
@@ -52,8 +59,7 @@ export function TaskItem({ entry, task }: { entry: CatalogEntry; task: TaskInfo 
   const startTask = useStore((s) => s.startTask);
   const taskAction = useStore((s) => s.taskAction);
   const status = useStore((s) => s.status);
-  const tasks = useStore((s) => s.tasks);
-  const di = useMemo(() => dailyInfo({ tasks, catalog }), [tasks, catalog]);
+  const di = useMemo(() => taskProgress(task), [task]);
   const [confirmReset, setConfirmReset] = useState(false);
   const focused = useStore((s) => s.focusedEntry === entry.id);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -62,7 +68,8 @@ export function TaskItem({ entry, task }: { entry: CatalogEntry; task: TaskInfo 
   }, [focused]);
   const lineupScopesOfEntry = entry.lineup_scopes ?? [];
 
-  const isDaily = task?.class_name === catalog.daily_task;
+  /** 这张卡属于工作流的主任务（随底部「开始」一起跑），而不是独立任务 */
+  const isDaily = !!task && task.class_name === workflow.task;
   const enableField = entry.enable_key ? fieldOf(task, entry.enable_key) : undefined;
   const enabled = entry.enable_key ? !!enableField?.value : isDaily ? true : !!task?.enabled;
   const optionKeys = entryOptionKeys(entry, task);
@@ -116,9 +123,9 @@ export function TaskItem({ entry, task }: { entry: CatalogEntry; task: TaskInfo 
 
       <div className="flex items-center gap-2 p-3 pl-4">
         {checkboxDisabled ? (
-          <Tooltip content={task ? '独立任务，直接在右侧「运行」' : '任务类未注册'}>
+          <Tooltip content={!task ? '任务类未注册' : isDaily ? `选项卡片，随「开始${workflow.label}」生效` : '独立任务，直接在右侧「运行」'}>
             <span className="w-4 h-4 flex items-center justify-center text-text-muted">
-              <Play className="w-3 h-3" />
+              {isDaily ? <SlidersHorizontal className="w-3 h-3" /> : <Play className="w-3 h-3" />}
             </span>
           </Tooltip>
         ) : (
@@ -253,7 +260,7 @@ export function TaskItem({ entry, task }: { entry: CatalogEntry; task: TaskInfo 
         <ConfirmDialog
           open={confirmReset}
           title="恢复默认"
-          message={`把「${task.name}」的全部选项恢复默认？${isDaily ? '\n这会影响其它板块里属于一键日常的项。' : ''}`}
+          message={`把「${task.name}」的全部选项恢复默认？${isDaily ? `\n这会影响「${workflow.label}」里属于这个任务的所有项。` : ''}`}
           confirmText="恢复"
           destructive
           onCancel={() => setConfirmReset(false)}

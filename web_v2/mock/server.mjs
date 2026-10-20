@@ -53,10 +53,13 @@ const state = {
   status: { running: false, paused: false, starting: false, current_task: null },
   tasks: [
     { name: '一键日常', class_name: 'DailyTask', enabled: true, running: false, paused: false, trigger: false, description: '按勾选项跑一轮日常', info: { '今日已完成(含之前几次)': ['邮件', '情报和战前补给'], '今日待重试': ['竞技场'], 上次运行: '2026-10-20 05:12' }, config: dailyKeys.map((a) => field(...a)) },
-    { name: '周常', class_name: 'WeeklyTask', enabled: true, running: false, trigger: false, description: '首领挑战 / 峰值推定 / 扩编实练', info: {}, config: [field('首领挑战', true, 'boolean'), field('峰值推定', true, 'boolean'), field('扩编实练', false, 'boolean'), field('难度', '困难', 'select', { options: ['普通', '困难', '噩梦'] })] },
-    { name: '推图', class_name: 'ClearMapTask', enabled: true, running: false, trigger: false, description: '自动推主线/活动关卡', info: {}, config: [field('关卡列表', ['1-1', '1-2'], 'multi_selection', { options: ['1-1', '1-2', '1-3', '1-4', '2-1', '2-2', '2-3', '2-4', '3-1'] }), field('失败后重试', 3, 'integer', { minimum: 0, maximum: 10 }), field('备注', '', 'multiline')] },
-    { name: '启动游戏', class_name: 'TestStartGame', enabled: true, running: false, trigger: false, description: '只启动游戏到主界面', info: {}, config: [] },
-    { name: '调试', class_name: 'DebugTask', enabled: true, running: false, trigger: false, description: '开发用', info: {}, config: [field('截图间隔', 1.5, 'number', { minimum: 0.1, maximum: 10 })] },
+    { name: '周常', class_name: 'WeeklyTask', enabled: true, running: false, trigger: false, description: '', info: {}, config: [field('首领挑战', true, 'boolean'), field('峰值推定', true, 'boolean'), field('扩编实练', false, 'boolean')] },
+    { name: '推图', class_name: 'ClearMapTask', enabled: true, running: false, trigger: false, description: '停在任意关卡页面启动即可，会先回到章节起点再从左到右推完所有未通关的关卡', info: {}, config: [field('普通OCR', true, 'boolean', { description: '普通OCR：不做任何图像预处理，直接识别关卡名称' }), field('除杂色OCR1', true, 'boolean', { description: '除杂色OCR1（标准白色）' }), field('除杂色OCR2', true, 'boolean', { description: '除杂色OCR2（宽松白灰色）' }), field('战斗内点击自动', false, 'boolean', { description: '进入战斗后若检测到「行动结束」，自动点击右上角的自动战斗按钮' })] },
+    { name: '启动一次游戏,120s后自动关闭', class_name: 'TestStartGame', enabled: true, running: false, trigger: false, description: '配合任务计划程序提前启动游戏', info: {}, config: [field('Exit After Task', true, 'boolean'), field('回到主页后等待的时间', 15, 'integer')] },
+    { name: '测试用', class_name: 'TestTask', enabled: true, running: false, trigger: false, description: '收菜', info: {}, config: [] },
+    { name: '调试工具', class_name: 'DebugTask', enabled: true, running: false, trigger: false, description: '按配置点一个文字 / 按 ESC / 截图，供远程调试用', info: {}, config: [field('先回主页', false, 'boolean'), field('点击文字', '', 'text'), field('点击坐标', '', 'text'), field('按ESC次数', 0, 'integer'), field('按键', '', 'text'), field('截图并OCR', false, 'boolean')] },
+    { name: 'Diagnosis', class_name: 'DiagnosisTask', enabled: true, running: false, trigger: false, description: 'Performance Test', info: {}, config: [] },
+    { name: '未列出的任务', class_name: 'SomeNewTask', enabled: true, running: false, trigger: false, description: '模拟后端新加、目录里还没有的任务', info: {}, config: [field('开关', true, 'boolean')] },
     { name: '模板监控', class_name: 'TemplateMonitorTask', enabled: false, running: false, trigger: true, description: '后台监控弹窗并自动处理', info: {}, config: [field('检测间隔(秒)', 5, 'integer', { minimum: 1, maximum: 60 })] },
   ],
   settings: [

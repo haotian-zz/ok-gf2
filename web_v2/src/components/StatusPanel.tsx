@@ -2,7 +2,7 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
 import { Activity, ChevronDown } from 'lucide-react';
-import { dailyInfo, useStore } from '@/store';
+import { taskProgress, useStore } from '@/store';
 
 export function StatusIndicator() {
   const status = useStore((s) => s.status);
@@ -35,8 +35,12 @@ export function StatusPanel() {
   const setPrefs = useStore((s) => s.setPrefs);
   const status = useStore((s) => s.status);
   const tasks = useStore((s) => s.tasks);
-  const catalog = useStore((s) => s.catalog);
-  const di = useMemo(() => dailyInfo({ tasks, catalog }), [tasks, catalog]);
+  // 正在跑的任务的 info；空闲时看一键日常的（今日已完成 / 待重试）
+  const di = useMemo(() => {
+    const cur = tasks.find((t) => t.name === status.current_task);
+    const withInfo = tasks.find((t) => t.info && Object.keys(t.info).length > 0);
+    return taskProgress(cur && cur.info && Object.keys(cur.info).length ? cur : withInfo);
+  }, [tasks, status.current_task]);
 
   const skip = new Set(['今日已完成(含之前几次)', '今日待重试', 'current_task']);
   const rows: [string, string][] = [
