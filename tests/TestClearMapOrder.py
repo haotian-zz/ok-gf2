@@ -295,6 +295,19 @@ class TestSupportByKind(unittest.TestCase):
             self.assertEqual(f"{s['name']}助战" in lineup_option.default_config, s["support"])
 
 
+class TestOutpostPresetName(unittest.TestCase):
+    def test_name_match(self):
+        from src.tasks.daily.daily_battle_mixin import DailyBattleMixin
+
+        m = DailyBattleMixin._outpost_name_match
+        self.assertTrue(m("编队1", "编队1"))
+        self.assertTrue(m("编 队1", "编队1"))
+        self.assertFalse(m("编队10", "编队1"))
+        self.assertFalse(m("编队", "编队1"))
+        self.assertFalse(m("编队2", "编队1"))
+        self.assertTrue(m("尘烟", "尘烟队"))
+        self.assertTrue(m("I尘烟队", "尘烟队"))
+
 class TestZilvLocked(unittest.TestCase):
     def test_gray_gap_rule(self):
         from src.core.BaseGfTask import zilv_locked
