@@ -21,29 +21,34 @@ WINDOW_TITLE = "少前2 自动化"
 
 
 class WindowApi:
-    """给网页里的自绘标题栏用（window.pywebview.api.*）。"""
+    """给网页里的自绘标题栏用（window.pywebview.api.*）。
+
+    注意：pywebview 会递归遍历 js_api 的所有公开属性来生成 JS 接口，
+    Window 对象必须放在下划线开头的私有属性里，否则它会从工作线程去碰
+    window.native（WebView2 COM 对象），和 UI 线程互相等待，整个进程卡死。
+    """
 
     def __init__(self):
-        self.window = None
+        self._window = None
         self._maximized = False
 
     def minimize(self):
-        if self.window:
-            self.window.minimize()
+        if self._window:
+            self._window.minimize()
 
     def toggle_maximize(self):
-        if not self.window:
+        if not self._window:
             return False
         if self._maximized:
-            self.window.restore()
+            self._window.restore()
         else:
-            self.window.maximize()
+            self._window.maximize()
         self._maximized = not self._maximized
         return self._maximized
 
     def close(self):
-        if self.window:
-            self.window.destroy()
+        if self._window:
+            self._window.destroy()
 
 
 def main():
@@ -78,7 +83,7 @@ def main():
         frameless=args.frameless,
         easy_drag=False,
     )
-    api.window = window
+    api._window = window
     try:
         webview.start()
     finally:
