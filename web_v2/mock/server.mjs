@@ -33,6 +33,7 @@ const dailyKeys = [
   ['竞技场', true, 'boolean'],
   ['班组', true, 'boolean'],
   ['尘烟', false, 'boolean', { sub_config: true, description: '指挥官未到 60 级自动跳过' }],
+  ['尘烟买第3次', false, 'boolean', { sub_config: true, description: '免费次数用完后花 50 坍塌晶条再买一次' }],
   ['大月卡', true, 'boolean'],
   ['拂晓之光补给包奖励', '访问许可', 'select', { sub_config: true, options: ['访问许可', '标准访问许可', '算力'] }],
   ['社区每日', false, 'boolean'],
@@ -59,7 +60,15 @@ const state = {
     { name: '模板监控', class_name: 'TemplateMonitorTask', enabled: false, running: false, trigger: true, description: '后台监控弹窗并自动处理', info: {}, config: [field('检测间隔(秒)', 5, 'integer', { minimum: 1, maximum: 60 })] },
   ],
   settings: [
-    { name: '阵容与助战', description: '各类关卡用的编队', fields: [field('体力本编队', '编队1', 'select', { options: ['编队1', '编队2', '编队3'] }), field('竞技场编队', '编队2', 'select', { options: ['编队1', '编队2', '编队3'] }), field('班组编队', '编队1', 'select', { options: ['编队1', '编队2', '编队3'] }), field('活动编队', '编队3', 'select', { options: ['编队1', '编队2', '编队3'] })] },
+    { name: '阵容与助战', description: '所有会进部署界面的任务共用。优先级：内置默认 → 这里的全局值 → 各场景单独设置（新版界面里在各板块直接改）', fields: [
+      field('编队名', '编队1', 'text', { description: '默认编队：下面各场景没单独填编队时都用它' }),
+      field('借好友助战', true, 'boolean', { description: '默认借不借好友助战' }),
+      field('助战角色', '威玛西娜', 'text'),
+      field('助战最低椎数', 6, 'integer', { minimum: 0, maximum: 6 }),
+      field('找不到就借战力最高', true, 'boolean'),
+      ...['推图', '竞技场', '体力本', '班组', '尘烟前哨战', '活动', '扩编实练'].map((sc) => field(`${sc}编队`, sc === '竞技场' ? '编队2' : '', 'text', { description: `${sc}用的编队，留空沿用默认编队` })),
+      ...['推图', '尘烟前哨战'].map((sc) => field(`${sc}助战`, '沿用全局', 'select', { options: ['沿用全局', '开', '关'] })),
+    ] },
     { name: '窗口', description: '游戏窗口与截图方式', fields: [field('窗口标题', '少女前线2：追放', 'text'), field('截图方式', 'BitBlt', 'select', { options: ['BitBlt', 'WGC', 'PrintWindow'] }), field('启动时置顶', false, 'boolean')] },
   ],
 };

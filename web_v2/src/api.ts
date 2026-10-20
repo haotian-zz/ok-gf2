@@ -56,6 +56,8 @@ export interface CatalogEntry {
   task: string;
   enable_key: string | null;
   keys: string[] | '*';
+  /** 用到的阵容场景（全局「阵容与助战」里的 <场景>编队 / <场景>助战） */
+  lineup_scopes?: string[];
   doc?: string;
 }
 

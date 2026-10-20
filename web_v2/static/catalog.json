@@ -1,5 +1,5 @@
 {
-  "_comment": "新版界面的目录：按游戏板块分组。entry.task 是任务类名；enable_key 是该子任务在任务配置里的开关键（没有就是独立任务，整项运行）；keys 是显示在选项面板里的配置键。",
+  "_comment": "新版界面的目录：按游戏板块分组。entry.task 是任务类名；enable_key 是该子任务在任务配置里的开关键（没有就是独立任务，整项运行）；keys 是显示在选项面板里的配置键；lineup_scopes 是这一项用到的阵容场景（全局「阵容与助战」里的 <场景>编队 / <场景>助战），在选项面板里显示成「阵容」卡片。",
   "daily_task": "DailyTask",
   "global_sections": [
     {
@@ -23,7 +23,7 @@
       {"id": "star_wish", "label": "闪耀星愿", "task": "DailyTask", "enable_key": "闪耀星愿", "keys": [], "doc": "主界面左侧活动横幅，有活动时才有。"}
     ]},
     {"id": "limited", "label": "限时开启", "icon": "⏱️", "desc": "主界面右侧「限时开启」。", "entries": [
-      {"id": "event_auto", "label": "活动自律（物资关卡）", "task": "DailyTask", "enable_key": "活动自律", "keys": ["当前物资关卡名称"], "doc": "进入开启中的大活动，挑战「当前物资关卡名称」指定的物资关卡。编队用全局设置里的「活动编队」。"},
+      {"id": "event_auto", "label": "活动自律（物资关卡）", "task": "DailyTask", "enable_key": "活动自律", "keys": ["当前物资关卡名称"], "lineup_scopes": ["活动"], "doc": "进入开启中的大活动，挑战「当前物资关卡名称」指定的物资关卡。"},
       {"id": "explore", "label": "边界推进：探索领取", "task": "DailyTask", "enable_key": "探索领取", "keys": [], "doc": "采集、领取、再派遣；没有「边界推进」入口时跳过。"}
     ]},
     {"id": "free_time", "label": "活动层", "icon": "🍵", "desc": "主界面右侧「活动层」：喝水、吃饭、浇花、逸趣导算奖励。", "entries": [
@@ -37,12 +37,12 @@
       {"id": "free_gift", "label": "免费礼包 / 心愿单", "task": "DailyTask", "enable_key": "购买免费礼包", "keys": ["商店心愿单购买"], "doc": "品质甄选里领「免费」礼包；开「商店心愿单购买」会到家具/班组/调度/讯段/心智/人形堆栈商店一键买心愿单。"}
     ]},
     {"id": "campaign", "label": "战役推进", "icon": "⚔️", "desc": "主界面右侧「战役推进」：补给作战、模拟作战。", "entries": [
-      {"id": "stamina", "label": "补给作战：自动刷体力", "task": "DailyTask", "enable_key": "自动刷体力", "keys": ["体力本", "刷钱本"], "doc": "按「体力本」选的关卡刷到体力不足；自律未解锁时改点「挑战」手动打（需要游戏内全局自动）。编队用全局设置里的「体力本编队」。"},
-      {"id": "arena", "label": "模拟作战：实兵演习（竞技场）", "task": "DailyTask", "enable_key": "竞技场", "keys": [], "doc": "进攻后领周期奖励。编队用全局设置里的「竞技场编队」。"},
-      {"id": "weekly", "label": "模拟作战：周常", "task": "WeeklyTask", "enable_key": null, "keys": "*", "doc": "首领挑战 / 峰值推定 / 扩编实练，单独作为「周常」任务运行。"}
+      {"id": "stamina", "label": "补给作战：自动刷体力", "task": "DailyTask", "enable_key": "自动刷体力", "keys": ["体力本", "刷钱本"], "lineup_scopes": ["体力本"], "doc": "按「体力本」选的关卡刷到体力不足；自律未解锁时改点「挑战」手动打（需要游戏内全局自动）。"},
+      {"id": "arena", "label": "模拟作战：实兵演习（竞技场）", "task": "DailyTask", "enable_key": "竞技场", "keys": [], "lineup_scopes": ["竞技场"], "doc": "进攻后领周期奖励。"},
+      {"id": "weekly", "label": "模拟作战：周常", "task": "WeeklyTask", "enable_key": null, "keys": "*", "lineup_scopes": ["扩编实练"], "doc": "首领挑战 / 峰值推定 / 扩编实练，单独作为「周常」任务运行。扩编实练进部署界面后按「扩编实练编队」切编队并补满。"}
     ]},
     {"id": "guild", "label": "班组", "icon": "🛡️", "desc": "主界面底栏「班组」。", "entries": [
-      {"id": "guild", "label": "要务作战 / 补给领取", "task": "DailyTask", "enable_key": "班组", "keys": ["尘烟"], "doc": "要务开始作战后领补给。「尘烟」会去前线打攻坚战，指挥官未到 60 级时自动跳过。编队用全局设置里的「班组编队」。"}
+      {"id": "guild", "label": "要务作战 / 补给领取", "task": "DailyTask", "enable_key": "班组", "keys": ["尘烟", "尘烟买第3次"], "lineup_scopes": ["班组", "尘烟前哨战"], "doc": "要务开始作战后领补给。「尘烟」会去尘烟前线：前哨战有次数就打；攻坚战指挥官未到 60 级时自动跳过。「尘烟买第3次」在免费次数用完后花 50 坍塌晶条再买一次。"}
     ]},
     {"id": "xunlu", "label": "巡录", "icon": "🧭", "desc": "主界面底栏「巡录」（远航巡录 / 大月卡）。", "entries": [
       {"id": "xunlu", "label": "远航巡录每日领取", "task": "DailyTask", "enable_key": "大月卡", "keys": ["拂晓之光补给包奖励"], "doc": "沿途行动 / 每日行动一键领取，补给包按选择的奖励领。"}
@@ -51,7 +51,7 @@
       {"id": "community", "label": "社区每日任务", "task": "DailyTask", "enable_key": "社区每日", "keys": ["用户名", "密码"]}
     ]},
     {"id": "tools", "label": "推图与工具", "icon": "🗺️", "desc": "独立运行的任务，不属于一键日常。", "entries": [
-      {"id": "clear_map", "label": "推图", "task": "ClearMapTask", "enable_key": null, "keys": "*"},
+      {"id": "clear_map", "label": "推图", "task": "ClearMapTask", "enable_key": null, "keys": "*", "lineup_scopes": ["推图"]},
       {"id": "start_game", "label": "启动一次游戏", "task": "TestStartGame", "enable_key": null, "keys": "*"},
       {"id": "debug", "label": "调试工具", "task": "DebugTask", "enable_key": null, "keys": "*"},
       {"id": "monitor", "label": "模板监控（触发任务）", "task": "TemplateMonitorTask", "enable_key": null, "keys": "*"}

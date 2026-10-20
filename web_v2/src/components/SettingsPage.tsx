@@ -15,7 +15,8 @@ import {
   Sun,
   type LucideIcon,
 } from 'lucide-react';
-import { useStore, taskByClass } from '@/store';
+import { LINEUP_GROUP, isScopeKey, useStore, taskByClass } from '@/store';
+import { ScopeTable } from './ScopeTable';
 import { accentList, type ThemePreference } from '@/themes';
 import { OptionList } from './OptionEditor';
 import { ConfirmDialog } from './ui/Modal';
@@ -271,9 +272,10 @@ export function SettingsPage() {
                 >
                   <OptionList
                     fields={g.fields}
-                    keys={g.fields.map((f) => f.key)}
+                    keys={g.fields.map((f) => f.key).filter((k) => g.name !== LINEUP_GROUP || !isScopeKey(settings, k))}
                     onChange={(k, v) => setSetting(g.name, k, v)}
                   />
+                  {g.name === LINEUP_GROUP && <ScopeTable />}
                 </Card>
               ))}
             </div>

@@ -124,6 +124,9 @@ interface State {
   clearLogs: () => void;
 
   setPage: (p: Page) => void;
+  /** 从设置页跳到任务页并展开某一项 */
+  focusEntry: (id: string) => void;
+  focusedEntry: string | null;
   setPrefs: (patch: Partial<UiPrefs>) => void;
   toggleExpanded: (id: string) => void;
   setAllExpanded: (expanded: boolean) => void;
@@ -134,6 +137,7 @@ interface State {
   setTaskConfig: (taskName: string, key: string, value: unknown) => Promise<void>;
   resetTaskConfig: (taskName: string) => Promise<void>;
   setSetting: (group: string, key: string, value: unknown) => Promise<void>;
+  setSettings: (group: string, changes: [string, unknown][]) => Promise<void>;
   resetSetting: (group: string) => Promise<void>;
   applyPreset: (presetId: string) => Promise<void>;
   setAllEnabled: (enabled: boolean) => Promise<void>;
@@ -229,7 +233,7 @@ export const useStore = create<State>((set, get) => {
     },
 
     async refreshAll() {
-      await Promise.all([get().refreshTasks(), get().refreshStatus()]);
+      await Promise.all([get().refreshTasks(), get().refreshStatus(), get().refreshSettings()]);
     },
     async refreshTasks() {
       const tasks = await endpoints.tasks();
@@ -259,6 +263,14 @@ export const useStore = create<State>((set, get) => {
     setPage(page) {
       set({ page });
       if (page === 'settings') get().refreshSettings().catch((e: Error) => toast.error(e.message));
+    },
+    focusedEntry: null,
+    focusEntry(id) {
+      const cur = new Set(get().prefs.expanded);
+      cur.add(id);
+      get().setPrefs({ expanded: [...cur] });
+      set({ page: 'main', focusedEntry: id });
+      window.setTimeout(() => set({ focusedEntry: null }), 2000);
     },
     setPrefs(patch) {
       const prefs = { ...get().prefs, ...patch };
@@ -319,6 +331,18 @@ export const useStore = create<State>((set, get) => {
       try {
         const updated = await endpoints.setSetting(group, key, value);
         set({ settings: get().settings.map((g) => (g.name === updated.name ? updated : g)) });
+      } catch (err) {
+        toast.error(`保存失败：${(err as Error).message}`);
+      }
+    },
+    async setSettings(group, changes) {
+      try {
+        let updated: SettingsGroup | null = null;
+        for (const [key, value] of changes) updated = await endpoints.setSetting(group, key, value);
+        if (updated) {
+          const u = updated;
+          set({ settings: get().settings.map((g) => (g.name === u.name ? u : g)) });
+        }
       } catch (err) {
         toast.error(`保存失败：${(err as Error).message}`);
       }
@@ -514,4 +538,73 @@ export function entryOptionKeys(entry: CatalogEntry, task: TaskInfo | undefined)
   if (!task) return [];
   if (entry.keys === '*') return task.config.map((f) => f.key).filter((k) => k !== entry.enable_key);
   return entry.keys;
+}
+
+// ---------- 阵容场景（全局「阵容与助战」里的 <场景>编队 / <场景>助战） ----------
+// 优先级：内置默认 → 全局值 → 场景单独设置；场景留空 / 「沿用全局」就继承
+
+export const LINEUP_GROUP = '阵容与助战';
+export const LINEUP_PRESET = '编队名';
+export const LINEUP_SUPPORT = '借好友助战';
+export const SUPPORT_INHERIT = '沿用全局';
+
+export interface ScopeState {
+  scope: string;
+  preset: string;
+  globalPreset: string;
+  effectivePreset: string;
+  /** null = 这个场景不支持借助战 */
+  support: string | null;
+  globalSupport: boolean;
+  effectiveSupport: boolean | null;
+  overridden: boolean;
+}
+
+export function lineupGroup(settings: SettingsGroup[]): SettingsGroup | undefined {
+  return settings.find((g) => g.name === LINEUP_GROUP);
+}
+
+export function lineupField(settings: SettingsGroup[], key: string): ConfigField | undefined {
+  return lineupGroup(settings)?.fields.find((f) => f.key === key);
+}
+
+/** 有「X编队」键的 X 就是一个场景（「编队名」不以「编队」结尾，不会混进来） */
+export function lineupScopes(settings: SettingsGroup[]): string[] {
+  const g = lineupGroup(settings);
+  return g ? g.fields.filter((f) => f.key.endsWith('编队')).map((f) => f.key.slice(0, -2)) : [];
+}
+
+export function isScopeKey(settings: SettingsGroup[], key: string): boolean {
+  return lineupScopes(settings).some((s) => key === `${s}编队` || key === `${s}助战`);
+}
+
+export function scopeState(settings: SettingsGroup[], scope: string): ScopeState | null {
+  const presetField = lineupField(settings, `${scope}编队`);
+  if (!presetField) return null;
+  const preset = String(presetField.value ?? '').trim();
+  const globalPreset = String(lineupField(settings, LINEUP_PRESET)?.value ?? '').trim();
+  const supportField = lineupField(settings, `${scope}助战`);
+  const support = supportField ? String(supportField.value || SUPPORT_INHERIT) : null;
+  const globalSupport = lineupField(settings, LINEUP_SUPPORT)?.value !== false;
+  return {
+    scope,
+    preset,
+    globalPreset,
+    effectivePreset: preset || globalPreset || '不切编队',
+    support,
+    globalSupport,
+    effectiveSupport: support === null ? null : support === SUPPORT_INHERIT ? globalSupport : support === '开',
+    overridden: !!preset || (support !== null && support !== SUPPORT_INHERIT),
+  };
+}
+
+export function resetScopeChanges(settings: SettingsGroup[], scope: string): [string, unknown][] {
+  const changes: [string, unknown][] = [];
+  if (lineupField(settings, `${scope}编队`)) changes.push([`${scope}编队`, '']);
+  if (lineupField(settings, `${scope}助战`)) changes.push([`${scope}助战`, SUPPORT_INHERIT]);
+  return changes;
+}
+
+export function entryOfScope(catalog: Catalog, scope: string): CatalogEntry | undefined {
+  return catalog.groups.flatMap((g) => g.entries).find((e) => (e.lineup_scopes ?? []).includes(scope));
 }

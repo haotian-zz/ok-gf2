@@ -1,5 +1,5 @@
 /** 任务卡片：沿用 MXU TaskItem 的结构（复选框 + 名称 + 选项预览 + 展开面板）。 */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { ChevronRight, Play, RotateCcw, Zap, ZapOff } from 'lucide-react';
 import type { CatalogEntry, ConfigField, TaskInfo } from '@/api';
@@ -8,6 +8,7 @@ import { Checkbox } from './ui/Checkbox';
 import { ConfirmDialog } from './ui/Modal';
 import { OptionList } from './OptionEditor';
 import { Tooltip } from './ui/Tooltip';
+import { LineupCard } from './LineupCard';
 
 function truncate(s: string, n: number) {
   return s.length > n ? `${s.slice(0, n)}…` : s;
@@ -54,6 +55,12 @@ export function TaskItem({ entry, task }: { entry: CatalogEntry; task: TaskInfo 
   const tasks = useStore((s) => s.tasks);
   const di = useMemo(() => dailyInfo({ tasks, catalog }), [tasks, catalog]);
   const [confirmReset, setConfirmReset] = useState(false);
+  const focused = useStore((s) => s.focusedEntry === entry.id);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focused) rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [focused]);
+  const lineupScopesOfEntry = entry.lineup_scopes ?? [];
 
   const isDaily = task?.class_name === catalog.daily_task;
   const enableField = entry.enable_key ? fieldOf(task, entry.enable_key) : undefined;
@@ -62,7 +69,7 @@ export function TaskItem({ entry, task }: { entry: CatalogEntry; task: TaskInfo 
   const optionFields = optionKeys
     .map((k) => fieldOf(task, k))
     .filter((f): f is ConfigField => !!f);
-  const canExpand = !!task && (optionFields.length > 0 || !!entry.doc || !!task.description);
+  const canExpand = !!task && (optionFields.length > 0 || lineupScopesOfEntry.length > 0 || !!entry.doc || !!task.description);
   const executorRunning = !!status.running && !!status.current_task;
 
   // 运行状态：独立任务看 running；日常子项看「当前任务」是否就是它
@@ -88,9 +95,11 @@ export function TaskItem({ entry, task }: { entry: CatalogEntry; task: TaskInfo 
 
   return (
     <div
+      ref={rootRef}
       className={clsx(
         'group bg-bg-secondary rounded-lg border border-border transition-shadow relative overflow-hidden',
         runStatus === 'running' && 'task-item-running',
+        focused && 'ring-2 ring-accent/60',
       )}
     >
       {runStatus !== 'idle' && (
@@ -215,6 +224,13 @@ export function TaskItem({ entry, task }: { entry: CatalogEntry; task: TaskInfo 
                   disabled={executorRunning && isDaily}
                   onChange={(key, value) => setTaskConfig(task.name, key, value).catch(() => {})}
                 />
+              )}
+              {task && lineupScopesOfEntry.length > 0 && (
+                <div className={clsx('space-y-3', optionFields.length > 0 && 'mt-4')}>
+                  {lineupScopesOfEntry.map((scope) => (
+                    <LineupCard key={scope} scope={scope} disabled={executorRunning} />
+                  ))}
+                </div>
               )}
               {task && (
                 <div className="mt-3 flex justify-end">
