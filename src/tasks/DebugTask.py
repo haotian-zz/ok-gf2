@@ -19,7 +19,6 @@ class DebugTask(BaseGfTask):
                 "点击坐标": "",
                 "按ESC次数": 0,
                 "截图并OCR": False,
-                "调试截图": True,
             }
         )
         self.config_description.update(

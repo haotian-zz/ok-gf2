@@ -90,7 +90,6 @@ class ClearMapTask(BaseGfTask):
                 "战斗内点击自动": False,
                 "自动使用体力药": False,
                 "借好友助战": False,
-                "调试截图": True,
             }
         )
         self.config_description.update(
@@ -118,10 +117,6 @@ class ClearMapTask(BaseGfTask):
                 "借好友助战": (
                     "开战前按设置页「阵容与助战」里的规则借助战：先切到指定编队，再选椎数达标的指定角色\n"
                     "（没有就借战力最高），撤掉旧助战/同名人形/战力最低的一人后把助战部署上场，最后补满空位"
-                ),
-                "调试截图": (
-                    "把扫描、选关、战斗各阶段的截图保存到 screenshots/推图/日期/ 下\n"
-                    "每个任务最多保留 400 张，方便排查问题"
                 ),
             }
         )

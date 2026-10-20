@@ -35,6 +35,7 @@ from src.core.support_select import (
     pick_withdraw_target,
     read_badge,
 )
+from src.core.debug_config import DEBUG_OPTION_NAME, KEY_DEBUG_SHOT
 from src.core.lineup_config import KEY_FALLBACK, KEY_MIN_BADGE, KEY_PRESET, KEY_ROLE, LINEUP_OPTION_NAME
 from src.data.FeatureList import FeatureList as fL
 from src.image.frame_processs import isolate_by_hsv_ranges
@@ -210,11 +211,11 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
     def debug_shot(self, tag, boxes=None):
         """
-        保存调试截图到 screenshots/<任务名>/<日期>/，仅在任务配置「调试截图」开启时生效。
+        保存调试截图到 screenshots/<任务名>/<日期>/，由设置页全局「调试」里的「调试截图」开关控制，对所有任务生效。
         :param tag: 文件名标签，说明当前阶段
         :param boxes: 需要画框标注的 Box 列表，可选
         """
-        if not self.config.get("调试截图", False):
+        if not self.debug_shot_enabled():
             return None
         try:
             return save_debug_shot(self.frame, self.name, tag, boxes)
@@ -333,6 +334,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             logger.error(f"[看门狗] 持续 {int(stalled)} 秒无进展，自动停止任务")
             self.info["Error"] = f"{int(stalled)} 秒没有进展，看门狗已停止任务，看日志里的 [看门狗] 和 watchdog 截图"
             self.disable()
+
+    def debug_shot_enabled(self):
+        try:
+            return bool(self.get_global_config(DEBUG_OPTION_NAME).get(KEY_DEBUG_SHOT, True))
+        except Exception:
+            return True
 
     def isolate_by_hsv_ranges(self, frame, ranges, invert=True, kernel_size=2):
         """
