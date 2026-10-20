@@ -80,6 +80,9 @@ TAB_FALLBACK_XY = {"我的人形": (0.815, 0.039), "好友助战": (0.902, 0.039
 restart_required_re = re.compile(r"重新启动游戏|重启游戏|需要重启")
 GAME_RESTART_TITLE_TIMEOUT = 120  # 秒：重新拉起游戏后等标题页「点击开始」的时间（实机：启动到标题约 50 秒）
 GAME_EXIT_TIMEOUT = 20  # 秒：点「确认」后等游戏自己退出的时间，超过就直接结束进程
+# 竞技场打完后的通知框 / 结算页（实录 2026-10-20）
+rank_up_notice_re = re.compile(r"晋升至|段位可获得|补给将通过邮件发放")  # 「您已晋升至新锐·三」段位晋升通知，ESC 能关
+battle_result_re = re.compile(r"^对战(胜利|失败)$|已结束$")  # 「对战胜利 / 对战失败」结算页只有「确认」能关
 # 每个任务开始前的隐藏步骤「确保游戏已进入主页」
 title_start_re = re.compile(r"点击开始")  # 标题页底部的「点击开始」
 GAME_LAUNCH_MAIN_TIMEOUT = 150  # 秒：从拉起游戏到进入主页的上限（实机：启动到标题约 50 秒，再加公告弹窗）
@@ -506,6 +509,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             elif self.find_boxes(boxes, match=pop_ups):
                 self.back()
                 self.sleep(1)
+            elif self._dismiss_notice(boxes):
+                pass
             else:
                 # 战斗中界面右上角是加速/跳过回合图标，不是剧情跳过，不能点
                 if self._is_battle_frame(boxes) or self._is_loading_frame(boxes):
@@ -1520,11 +1525,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                         return False
             self.click(box, after_sleep=2)
             return False
-        # 「本期扩编实练已结束」这类只有「确认」的通知框挡着，点回主页按钮没用
-        if self.ocr(box=self.box.center, match=re.compile("已结束$")):
-            if confirm := self.ocr(box=self.box.bottom, match=re.compile("^确认$")):
-                self.click(confirm, after_sleep=2)
-                return False
+        # 「本期扩编实练已结束」通知框、竞技场「对战胜利/失败」结算页：只有「确认」能关，ESC 没用
+        if self._confirm_battle_result():
+            return False
         # 停在战斗部署界面时 ESC 只会弹出/关掉关卡信息菜单，回不去；菜单里有「退出作战」就点它（后面的确认框走上面的离开确认）
         if quit_box := self.ocr(box=self.box.bottom_left, match=re.compile("^退出作战$")):
             if self.ocr(box=self.box.bottom_right, match=re.compile("^继续作战$")):
@@ -2250,6 +2253,33 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.log_info("重新启动游戏", notify=False)
         self.start_device()
         self.next_frame()
+
+    # ------------------------------------------------------------------ 战斗结算相关的通知框
+    def _dismiss_notice(self, boxes):
+        """
+        实录 2026-10-20：竞技场打赢后先弹「您已晋升至新锐·三，首次晋升可获得补给…」的段位通知，
+        盖在「对战胜利」结算页上面；它没有按钮文字，skip_dialogs 认不出就干等 30 秒超时。ESC 能关掉它。
+        """
+        if not self.find_boxes(boxes, match=rank_up_notice_re):
+            return False
+        self.log_info("弹出段位晋升通知，按 ESC 关掉", notify=False)
+        self.debug_shot("rank_up_notice", boxes)
+        self.back(after_sleep=1.5)
+        self.next_frame()
+        return True
+
+    def _confirm_battle_result(self):
+        """
+        实录 2026-10-20：竞技场「对战胜利」结算页（积分、作战奖励、伤害统计、确认）只有「确认」能关，
+        回主页一直按 ESC 按了 85 秒超时，整个一键日常中断。认出结算页就点「确认」。
+        """
+        if not self.ocr(match=battle_result_re, log=True):
+            return False
+        if confirm := self.ocr(box=self.box.bottom, match=re.compile(r"^确认$")):
+            self.log_info("在战斗结算页，点「确认」回去", notify=False)
+            self.click(confirm, after_sleep=2)
+            return True
+        return False
 
     # ------------------------------------------------------------------ 任务开始前：确保游戏已进入主页
     def _game_process_age(self):
