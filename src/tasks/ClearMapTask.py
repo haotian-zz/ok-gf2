@@ -54,7 +54,7 @@ DIFFICULTIES = ("普通", "困难")
 difficulty_re = re.compile(r"^(普通|困难)$")
 DIFFICULTY_FILL = (0.052, 0.013)  # 按钮文字中心往外取多大一块看填充色（左右、上下半宽，按画面高）
 DIFFICULTY_MIN_FILL = 0.3
-# 「英雄难度」从 11.0 章开始才有，是全局开关：点地图右下角的按钮弹出说明窗，底部「开启中 / 未开启」+ 拨动开关。
+# 「英雄难度」从 11.0 章开始才有，每章单独开关（实录：11.0 打开后进 12.0 还是「未开启」）：点地图右下角的按钮弹出说明窗，底部「开启中 / 未开启」+ 拨动开关。
 # 开着时关卡面板顶上标「英雄难度」、没有「特殊奖励」，卡片的对勾和勋章也按英雄难度单独算。
 HERO_FROM_CHAPTER = 11
 hero_button_re = re.compile(r"英雄难度")
@@ -461,7 +461,7 @@ class ClearMapTask(BaseGfTask):
     def ensure_hero(self, want):
         """
         按 want 开 / 关英雄难度，返回本章是不是在按英雄难度推。
-        英雄难度是全局开关，但只有 11.0 之后的章节地图上才有按钮：没按钮的章节不用管，按普通推。
+        英雄难度每章单独开关，只有 11.0 之后的章节地图上才有按钮：没按钮的章节不用管，按普通推。
         """
         button = self.wait_ocr(box="bottom_right", match=hero_button_re, time_out=2, raise_if_not_found=False)
         if not button:
