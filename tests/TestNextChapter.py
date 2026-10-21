@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 source = Path(__file__).resolve().parents[1] / "src/tasks/ClearMapTask.py"
 tree = ast.parse(source.read_text(encoding="utf-8"))
-names = ("chapter_titles", "current_and_next_chapter", "chapter_signature")
+names = ("chapter_titles", "current_and_next_chapter", "chapter_signature", "chapter_display_name")
 funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
 consts = [n for n in tree.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id.startswith("CHAPTER_") or isinstance(t, ast.Name) and t.id.startswith("chapter_") for t in n.targets)]
 ns = {"re": re}
@@ -68,6 +68,14 @@ class ChapterSelectTest(unittest.TestCase):
     def test_selecting_other_chapter_changes_signature(self):
         after = [("100%", 2221, 895) if r[0] == "57%" else ("48/48", 2339, 1016) if r[0] == "27/48" else r for r in SELECT]
         self.assertNotEqual(chapter_signature(boxes(SELECT), W, H), chapter_signature(boxes(after), W, H))
+
+
+class DisplayNameTest(unittest.TestCase):
+    def test_strip_badge_and_noise(self):
+        f = ns["chapter_display_name"]
+        self.assertEqual(f("010.0远日点·下篇Q"), "远日点·下篇")  # 实录 18:40 的 OCR
+        self.assertEqual(f("火花之罪·上篇心"), "火花之罪·上篇心")
+        self.assertEqual(f("交织突进"), "交织突进")
 
 
 if __name__ == "__main__":

@@ -66,6 +66,12 @@ def current_and_next_chapter(boxes, width, height):
 chapter_progress_re = re.compile(r"^\s*\d{1,3}\s*%\s*$|^\s*\d{1,3}\s*/\s*\d{1,3}\s*$")
 
 
+def chapter_display_name(text):
+    """「010.0远日点·下篇Q」→「远日点·下篇」：去掉粘进来的角标数字和尾巴上的杂字，只用于日志。"""
+    m = re.search(r"[\u4e00-\u9fff][\u4e00-\u9fff·・\s]*[\u4e00-\u9fff]", text or "")
+    return m.group(0) if m else (text or "").strip()
+
+
 def chapter_signature(boxes, width, height):
     """
     选中了哪一章的指纹：右侧「57%」「27/48」两个数字 + 左边角标所在行。
@@ -330,7 +336,7 @@ class ClearMapTask(BaseGfTask):
         self.next_frame()
         after_boxes = self.ocr(log=True)
         if chapter_signature(after_boxes, self.width, self.height) == before:
-            self.log_info(f"下一章「{nxt.name}」还没解锁（点了没反应）", notify=True)
+            self.log_info(f"下一章「{chapter_display_name(nxt.name)}」还没解锁（点了没反应）", notify=True)
             self.debug_shot("next_chapter_locked", after_boxes)
             return None
         confirm = self.find_boxes(after_boxes, match=self.fix_match_regex(["确认"]))
@@ -340,7 +346,7 @@ class ClearMapTask(BaseGfTask):
         self.click(confirm, after_sleep=3)
         # 新章节开头常有剧情 / 动画，跳过直到看到关卡卡片
         self.skip_dialogs(end_match=map_re, time_out=180, has_dialog=True, raise_if_not_found=False)
-        return nxt.name
+        return chapter_display_name(nxt.name)
 
     def resume_battle(self, time_out=1200):
         """
