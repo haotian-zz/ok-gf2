@@ -27,6 +27,7 @@ chapter_badge_re = re.compile(r"\d+\s*\.\s*\d\s*$")
 chapter_title_re = re.compile(r"[\u4e00-\u9fff]{2,}")
 chapter_noise_re = re.compile(r"^C\s*-|猎人评定|同调演练|剧情战役|往期活动|模拟作战|补给作战")
 chapter_select_words = ["章节进度"]
+campaign_re = re.compile(r"战役推进")  # 游戏主页右上角的作战入口
 
 CHAPTER_VERIFY_ROUNDS = 4  # 推完一章后按「章节进度」核对，最多回去再扫几轮
 CHAPTER_MAX_PASSES = 6  # 一章最多从头扫几遍（每遍推过关才会再扫，正常两遍就停）
@@ -518,6 +519,20 @@ class ClearMapTask(BaseGfTask):
             self.ocr(box="bottom_right", match=difficulty_re)
         )
 
+    def open_campaign_from_main(self):
+        """
+        停在游戏主页（右上「战役推进」）就点进去，回到章节选择页，返回是否点了。
+        实录 2026-10-21 12.5 章英雄难度：失败结算页点确认后又弹了一个带「确认」的窗口，点完回到了主页，
+        回地图的流程不认主页，一直当剧情跳过。主页上不能乱按 ESC（会弹退出游戏）。
+        """
+        entry = self.ocr(box="top_right", match=campaign_re)
+        if not entry:
+            return False
+        self.log_info("停在游戏主页，点「战役推进」回章节选择页", notify=True)
+        self.click(entry, after_sleep=3)
+        self.wait_until(self.on_chapter_select, time_out=10, raise_if_not_found=False)
+        return True
+
     def open_chapter_select(self):
         """从章节地图按 ESC 回到章节选择页。"""
         for _ in range(3):
@@ -609,6 +624,8 @@ class ClearMapTask(BaseGfTask):
             boxes = self.ocr()
             if self.find_boxes(boxes, match=map_re):
                 return True
+            if self.find_boxes(boxes, match=campaign_re):
+                return False  # 游戏主页，交给 ensure_map 点「战役推进」
             if (
                 self.find_boxes(boxes, match="作战开始")
                 or self._is_battle_frame(boxes)
@@ -815,7 +832,11 @@ class ClearMapTask(BaseGfTask):
             self.debug_shot("no_map_cards")
             if self.reenter_from_chapter_select():
                 continue
+            if self.open_campaign_from_main():
+                continue
             if self.resume_battle(time_out=300):
+                continue
+            if self.open_campaign_from_main():
                 continue
             self.back(after_sleep=2)
         ordered = self.scan_maps()

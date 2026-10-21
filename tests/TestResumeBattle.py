@@ -22,6 +22,7 @@ ns = {
     "BACK_TO_MAP": ["back"],
     "pop_ups": ["点击空白处关闭"],
     "BattleLost": type("BattleLost", (Exception,), {}),
+    "campaign_re": re.compile(r"战役推进"),
 }
 exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), "exec"), ns)
 resume_battle = ns["resume_battle"]
@@ -93,6 +94,12 @@ class ResumeBattleTest(unittest.TestCase):
         task = make_task([[box("任务失败"), box("确认")]])
         with self.assertRaises(ns["BattleLost"]):
             resume_battle(task)
+
+    def test_main_page_is_left_to_ensure_map(self):
+        """实录 12.5 章：失败结算后回到了游戏主页，不能在主页当剧情反复跳过。"""
+        task = make_task([[box("战役推进"), box("整备室"), box("活动层")]])
+        self.assertFalse(resume_battle(task))
+        task.skip_dialogs.assert_not_called()
 
     def test_unhandled_page_does_not_spin_until_timeout(self):
         task = make_task([[box("？？？")]])

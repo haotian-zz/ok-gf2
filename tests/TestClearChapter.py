@@ -170,6 +170,9 @@ class FakeChapter:
     def reenter_from_chapter_select(self):
         return False
 
+    def open_campaign_from_main(self):
+        return False
+
     def chapter_percent(self):
         battles = [st for st in self.stages.values() if not st.get("story")]
         return 100 * sum(st["done"] for st in battles) // len(battles)
@@ -280,6 +283,16 @@ class ClearChapterTest(unittest.TestCase):
         self.assertEqual(game.played.count("Z-1"), 1)
         self.assertTrue(game.stages["1-2"]["done"])
         self.assertEqual(count, 2)
+
+    def test_main_page_goes_through_campaign_without_esc(self):
+        # 实录 12.5 章：失败结算后回到游戏主页，点「战役推进」回去，主页上不按 ESC
+        game = FakeChapter({"1-1": {"x": 100, "done": True}})
+        game.blank = 1
+        calls = []
+        game.open_campaign_from_main = lambda: calls.append("campaign") or True
+        game.back = lambda after_sleep=0: calls.append("esc")
+        self.assertTrue(game.ensure_map())
+        self.assertEqual(calls, ["campaign"])
 
     def test_normal_mode_loss_stops(self):
         game = FakeChapter({"1-1": {"x": 100, "done": False}})
