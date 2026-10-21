@@ -479,13 +479,21 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
                     raise Exception("请从游戏主页进入")
             self.sleep(recheck_time)
 
-    def skip_dialogs(self, end_match, end_box=None, time_out=120, has_dialog=True, raise_if_not_found=True):
+    def skip_dialogs(
+        self, end_match, end_box=None, time_out=120, has_dialog=True, raise_if_not_found=True, loading_grace=120
+    ):
+        """
+        跳过剧情/对话，直到出现 end_match。画面是加载页（资源加载中 xx% 等）时超时顺延，最多多等 loading_grace 秒
+        （实录 2026-10-21 15.0 章：打完 VA-1-12 回地图的「资源加载中 30%」停了 30 多秒，推图被判超时停掉）。
+        """
         self.info_set("current_task", "skip_dialogs")
         start = time.time()
+        deadline = start + time_out
+        hard_deadline = deadline + loading_grace
         attempts = 0
         next_debug_shot = 30
         boxes = []
-        while time.time() - start < time_out:
+        while time.time() < deadline:
             if time.time() - start > next_debug_shot:
                 # 长时间没匹配到结束条件，留一张图方便排查卡在什么页面
                 self.debug_shot("skip_dialogs_waiting")
@@ -530,6 +538,8 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
                 if self._is_battle_frame(boxes) or self._is_loading_frame(boxes):
                     # 游戏在打/在加载，不算卡住，喂一下看门狗
                     self._touch_progress()
+                if self._is_loading_frame(boxes):
+                    deadline = min(max(deadline, time.time() + 5), hard_deadline)
                 if has_dialog and (self.find_boxes(boxes, match=map_re) or self.find_boxes(boxes, match=nav_tabs_re)):
                     # 实录 2026-10-20：选关页面右上角是货币和「+」，真实输入下乱点会弹出「物品详情」；
                     # 章节选择页右上角是「模拟作战」页签，乱点会跑进模拟作战。导航页上什么都别点
