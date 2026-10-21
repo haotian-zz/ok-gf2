@@ -1,9 +1,11 @@
 import re
 import time
+from collections import Counter
 
 from ok import Logger
 
 from src.core.BaseGfTask import pop_ups, BaseGfTask, map_re, chapter_select_re
+from src.core.stage_card import MEDAL_BOX, has_clear_badge, medal_re, parse_medals
 from src.image.hsv_config import HSVRange as hR
 
 logger = Logger.get_logger(__name__)
@@ -25,6 +27,13 @@ chapter_badge_re = re.compile(r"\d+\s*\.\s*\d\s*$")
 chapter_title_re = re.compile(r"[\u4e00-\u9fff]{2,}")
 chapter_noise_re = re.compile(r"^C\s*-|猎人评定|同调演练|剧情战役|往期活动|模拟作战|补给作战")
 chapter_select_words = ["章节进度"]
+
+CHAPTER_MAX_PASSES = 6  # 一章最多从头扫几遍（每遍推过关才会再扫，正常两遍就停）
+STAGE_MAX_ATTEMPTS = 2  # 同一关一次推图里最多打几次
+ENSURE_MAP_TRIES = 4  # 看不到关卡时最多恢复几次
+PASS_MAX_STEPS = 300  # 一遍扫描最多处理多少步（防止死循环）
+STATUS_TEXT = {"cleared": "已通关（面板没有首通奖励）, 跳过", "locked": "未解锁, 先推其他关卡", "nopanel": "没读到关卡面板, 跳过",
+               "unknown": "面板反复读不到按钮, 跳过", "skip": "跳过"}
 
 
 class ChapterLocked(Exception):
@@ -124,22 +133,6 @@ def canonical_name(name_group):
 def order_maps(maps, name_groups):
     """把关卡和对应的名字组配对后按 x 从左到右排序，返回 [(map, name_group), ...]。"""
     return sorted(zip(maps, name_groups, strict=True), key=lambda item: item[0].x)
-
-
-def pick_candidate(ordered, skip, cursor=None):
-    """
-    从排序后的 (map, name_group) 列表里挑下一个要点的关卡。
-
-    - skip 里的名字（本地记录已通关 / 本次已处理 / 本轮未解锁）跳过
-    - cursor 是进度游标：最近一次处理过的关卡名；只在它右边找。游标不在屏幕上时退回最左边
-    - 返回 None 表示屏幕上没有可点的关卡
-    """
-    usable = [(m, g) for m, g in ordered if not (g & skip)]
-    if cursor:
-        cursor_box = next((m for m, g in ordered if cursor in g), None)
-        if cursor_box is not None:
-            usable = [(m, g) for m, g in usable if m.x > cursor_box.x]
-    return usable[0] if usable else None
 
 
 class ClearMapTask(BaseGfTask):
@@ -268,38 +261,26 @@ class ClearMapTask(BaseGfTask):
             self.stop_watchdog()
 
     def _run_sweep(self):
-        ordered = self.scan_maps()
-        if not ordered and self.reenter_from_chapter_select():
-            # 停在章节选择页（或作战的其他页签）：进当前选中的章节
-            ordered = self.scan_maps()
-        if not ordered:
-            # 不在选关页面：可能停在部署界面、战斗中或结算页（比如上次手动停止），先把这一关收尾再继续
-            if not self.resume_battle():
-                raise Exception("未找到要推的图! 请停在关卡选择页面再启动")
-            ordered = self.scan_maps()
-            if not ordered:
-                raise Exception("收尾后仍未回到选关页面, 请检查游戏画面")
+        # 停在章节选择页、作战的其他页签、部署界面、战斗中或结算页都可以启动：ensure_map 会先回到选关地图
+        self.ensure_map()
 
         total = 0
         for _ in range(30):
-            self.go_to_chapter_start()
-            try:
-                count, locked = self.sweep_right(), None
-            except ChapterLocked as e:
-                count, locked = getattr(e, "count", 0), e
+            count, locked = self.clear_chapter()
             total += count
+            if locked and not self.config.get("推完继续下一章", True):
+                err = ChapterLocked(f"剩余关卡都未解锁({locked}), 请检查前置关卡后再启动")
+                err.count = count
+                raise err
             if not self.config.get("推完继续下一章", True):
-                if locked:
-                    raise locked
                 break
             nxt = self.enter_next_chapter()
             if not nxt:
                 if locked:
-                    self.log_info(f"{locked}；下一章也没解锁，推图结束", notify=True)
+                    self.log_info(f"本章还有未解锁的 {locked}；下一章也没解锁，推图结束", notify=True)
                 break
             self.log_info(f"进入下一章「{nxt}」继续推图", notify=True)
-            if not self.scan_maps():
-                raise Exception(f"进入「{nxt}」后没看到关卡, 请检查游戏画面")
+            self.ensure_map()
         self.log_info(f"推图完成, 本次推进 {total} 关", notify=True)
 
     # ------------------------------------------------------------------ 持续推进
@@ -411,50 +392,57 @@ class ClearMapTask(BaseGfTask):
                 return False
         return False
 
-    def go_to_chapter_start(self):
+    # ------------------------------------------------------------------ 推一章：反复整章扫，直到一遍下来什么都没推
+    def clear_chapter(self):
         """
-        点屏幕最左边的卡片把视野往左挪，直到最左的卡片不再变化（到达章节起点）。
-        地图拖动对 PostMessage 无效，但点任意卡片后游戏会把它滚到屏幕左中位置。
-        路过的卡片顺便核实一下状态。
+        推完当前章节。不靠「进度游标」推断哪些关处理过，每一遍都只看画面：
+        1. 回章节起点，从左往右整章扫一遍：卡片右上有对勾 = 已通关，直接跳过（不点面板）；
+           没对勾的点开面板：能挑战/观看就打，未解锁就先放着；
+        2. 这一遍推过任何关，就再从头扫一遍（推过的关可能解锁了任何位置的支线）；
+        3. 一遍下来一关都没推 = 本章推完（不动点）；剩下没对勾的都是未解锁的。
+        同一关最多打两次（打完还没对勾说明识别或战斗有问题，别死循环）。
+        画面上看不到关卡（剧情、结算、章节选择页、弹窗……）一律交给 ensure_map 回到地图，不当成错误。
+        :return: (本章推进的关数, 剩下未解锁的关卡名列表)
         """
-        self.info_set("current_task", "回到章节起点")
-        prev = None
-        for _ in range(30):
-            ordered = self.scan_maps()
-            if not ordered:
-                return
-            leftmost, group = ordered[0]
-            name = canonical_name(group)
-            if name == prev or leftmost.x >= self.width * 0.45:
-                return
-            prev = name
-            self.inspect_card(leftmost, name)
-            self.close_map_panel()
+        attempts = Counter()
+        total = 0
+        locked = []
+        for pass_no in range(1, CHAPTER_MAX_PASSES + 1):
+            played, locked = self.chapter_pass(attempts)
+            total += played
+            self.log_info(f"第 {pass_no} 遍扫完：推了 {played} 关，未解锁 {sorted(locked) or '无'}", notify=False)
+            if played == 0:
+                break
+        medals = self.chapter_medals()
+        if medals and medals[0] < medals[1]:
+            self.log_info(
+                f"本章勋章 {medals[0]}/{medals[1]}（有关卡没拿满挑战目标或还没解锁），未解锁 {sorted(locked) or '无'}",
+                notify=True,
+            )
+        elif medals:
+            self.log_info(f"本章勋章 {medals[0]}/{medals[1]}，全部拿到", notify=False)
+        return total, sorted(locked)
 
-    def sweep_right(self):
-        """从当前视野开始一路往右，核实并推进每一关，直到右边没有可处理的关卡。返回本次推进的关数。"""
+    def chapter_pass(self, attempts):
+        """从章节起点往右扫一遍，推掉所有能推的关。返回 (这一遍推的关数, 这一遍看到的未解锁关卡名)。"""
         self.info_set("current_task", "从左到右推图")
-        count = 0
-        session_done = set()  # 本次已处理过的关卡名
-        locked = set()  # 本轮判定未解锁，推完任意一关后清空重判
-        cursor = None  # 进度游标：最近一次处理过的关卡名，只往它右边推
-        last_scroll = None  # 上次为了往右看而点击的最右卡片名
-        rewound = False  # 本轮是否已经回到章节起点重查过未解锁的关卡
-        pushed_since_rewind = False  # 上次从章节起点开扫以来推过关卡（可能解锁了游标左边的支线）
-        unknown_tries = {}  # 面板读不出按钮的关卡 -> 已重试次数
-
-        while True:
-            self.sleep(1)
-            ordered = self.scan_maps()
-            if not ordered and self.reenter_from_chapter_select():
-                ordered = self.scan_maps()
-            if not ordered:
-                raise Exception("选关页面上没有识别到关卡, 请检查游戏画面")
-
-            skip = session_done | locked
-            candidate = pick_candidate(ordered, skip, cursor)
-            if candidate is None:
-                # 屏幕右边没有可处理的了：点最右边的卡片把视野往右挪，看看还有没有更多关卡
+        self.go_to_chapter_start()
+        handled = set()  # 这一遍已经看过的关卡名（含 OCR 的别名）
+        locked = set()
+        unknown_tries = Counter()
+        played = 0
+        last_scroll = None
+        for _ in range(PASS_MAX_STEPS):
+            ordered = self.ensure_map()
+            pending = [(card, group) for card, group in ordered if not (group & handled)]
+            todo = []
+            for card, group in pending:
+                if has_clear_badge(self.frame, card, self.width, self.height):
+                    handled.update(group)
+                else:
+                    todo.append((card, group))
+            if not todo:
+                # 屏幕上的都看过了：点最右边的卡片把视野往右挪（点过后游戏把它滚到左边）
                 rightmost, group = ordered[-1]
                 name = canonical_name(group)
                 if name != last_scroll and rightmost.x > self.width * 0.55:
@@ -463,59 +451,28 @@ class ClearMapTask(BaseGfTask):
                     self.click(rightmost, after_sleep=1.5)
                     self.close_map_panel()
                     continue
-                if pushed_since_rewind or (locked and not rewound):
-                    # 未解锁的关卡可能在游标左边、甚至已经滚出屏幕（比如 SL-5-3 在 BH-5-1 左边）；
-                    # 推过的关卡也可能解锁了游标左边的支线（实录 2026-10-20：10-8 打完后 BH-10-3 解锁，
-                    # 但它在 10-10 左边，游标停在 10-10 时被跳过）。回章节起点不带游标重新扫一遍，
-                    # 直到某一遍从头扫到尾一关都没推。
-                    why = "推过关卡，可能解锁了左边的支线" if pushed_since_rewind else f"重查未解锁的 {sorted(locked)}"
-                    self.log_info(f"右边没有可推的关卡，回章节起点再扫一遍（{why}）", notify=False)
-                    rewound = True
-                    pushed_since_rewind = False
-                    locked.clear()
-                    cursor = None
-                    last_scroll = None
-                    self.go_to_chapter_start()
-                    continue
-                if locked:
-                    err = ChapterLocked(f"剩余关卡都未解锁({sorted(locked)}), 请检查前置关卡后再启动")
-                    err.count = count
-                    raise err
-                return count
-
-            card, group = candidate
+                return played, locked
+            card, group = todo[0]
             name = canonical_name(group) or "unknown"
             status, action = self.inspect_card(card, name)
-            if status == "nopanel":
-                self.log_info(f"{name} 未识别到关卡面板, 跳过", notify=False)
-                session_done.update(group)
+            if status == "unknown" and unknown_tries[name] < 2:
+                unknown_tries[name] += 1
+                self.log_info(f"{name} 面板上没读到挑战/观看按钮，关掉面板重读第 {unknown_tries[name]} 次", notify=False)
                 self.close_map_panel()
                 continue
-            if status == "unknown":
-                tries = unknown_tries.get(name, 0) + 1
-                unknown_tries[name] = tries
-                if tries <= 2:
-                    self.log_info(f"{name} 面板上没读到挑战/观看按钮，关掉面板重试第 {tries} 次", notify=False)
-                else:
-                    self.log_info(f"{name} 面板反复读不到按钮, 跳过", notify=True)
-                    session_done.update(group)
+            if status in ("challenge", "watch") and attempts[name] >= STAGE_MAX_ATTEMPTS:
+                self.log_info(f"{name} 已经打过 {attempts[name]} 次还是没通关标记，这次推图不再打它", notify=True)
+                status = "skip"
+            if status not in ("challenge", "watch"):
+                if status == "locked":
+                    locked.add(name)
+                self.log_info(f"{name} {STATUS_TEXT.get(status, status)}", notify=False)
+                handled.update(group)
                 self.close_map_panel()
                 continue
-            if status == "locked":
-                self.log_info(f"{name} 未解锁, 先推其他关卡", notify=False)
-                locked.update(group)
-                self.close_map_panel()
-                continue
-            if status == "cleared":
-                self.log_info(f"{name} 已通关, 跳过", notify=False)
-                session_done.update(group)
-                cursor = name
-                self.close_map_panel()
-                continue
-
-            # challenge / watch
+            attempts[name] += 1
             self.click(action, after_sleep=2)
-            # 实录 2026-10-20：看完 SL-10-6 剧情游戏退回了章节选择页，所以章节选择页也算结束，下一轮扫描前再点确认进回来
+            # 看完/打完游戏可能退回地图、章节选择页，甚至停在剧情或结算上；结束条件宽一点，剩下的交给 ensure_map
             if status == "challenge":
                 self.auto_battle(
                     end_match=[map_re, chapter_select_re],
@@ -523,16 +480,56 @@ class ClearMapTask(BaseGfTask):
                     need_click_auto=self.config.get("战斗内点击自动", False),
                 )
             else:
-                self.skip_dialogs(end_match=[map_re, chapter_select_re])
-            count += 1
-            session_done.update(group)
-            cursor = name
-            if locked:
-                # 推过一关后，之前未解锁的关卡可能已经解锁；它们可能在游标左边，所以不带游标重新找
-                locked.clear()
-                cursor = None
+                self.skip_dialogs(end_match=[map_re, chapter_select_re], raise_if_not_found=False)
+            played += 1
+            handled.update(group)
             last_scroll = None
-            pushed_since_rewind = True
+            self.close_map_panel()
+        raise Exception(f"一遍扫描超过 {PASS_MAX_STEPS} 步还没扫完, 请检查游戏画面")
+
+    def ensure_map(self, tries=ENSURE_MAP_TRIES):
+        """
+        保证当前在选关地图上，返回扫描到的卡片。看不到关卡时按通用的顺序恢复：
+        章节选择页 → 点确认进回去；部署/战斗/结算/剧情 → resume_battle 收尾；都不是 → ESC 关掉可能的弹层。
+        实录 2026-10-20：看完第 11 章最后的剧情点 LS-1-7 后停在一个没有关卡卡片的画面，旧逻辑直接报错停了，
+        右边下排的 LZ-1-4 / LZ-1-6 没推。
+        """
+        for attempt in range(tries):
+            ordered = self.scan_maps()
+            if ordered:
+                return ordered
+            self.log_info(f"画面上没有关卡卡片，尝试回到选关地图（第 {attempt + 1} 次）", notify=False)
+            self.debug_shot("no_map_cards")
+            if self.reenter_from_chapter_select():
+                continue
+            if self.resume_battle(time_out=300):
+                continue
+            self.back(after_sleep=2)
+        ordered = self.scan_maps()
+        if not ordered:
+            raise Exception("回不到选关地图, 请检查游戏画面")
+        return ordered
+
+    def chapter_medals(self):
+        """左下角本章勋章「63/69」。"""
+        boxes = self.ocr(*MEDAL_BOX, match=medal_re) or []
+        return parse_medals([b.name for b in boxes])
+
+    def go_to_chapter_start(self):
+        """
+        点屏幕最左边的卡片把视野往左挪，直到最左的卡片不再变化（到达章节起点）。
+        点卡片会弹出面板，游戏会把它滚到屏幕左中位置；面板随手关掉，状态留给扫描时看对勾判断。
+        """
+        self.info_set("current_task", "回到章节起点")
+        prev = None
+        for _ in range(30):
+            ordered = self.ensure_map()
+            leftmost, group = ordered[0]
+            name = canonical_name(group)
+            if name == prev or leftmost.x >= self.width * 0.45:
+                return
+            prev = name
+            self.click(leftmost, after_sleep=1.5)
             self.close_map_panel()
 
 

@@ -43,7 +43,6 @@ from src.tasks.ClearMapTask import (
     classify_panel,
     merge_maps,
     order_maps,
-    pick_candidate,
 )
 
 
@@ -80,34 +79,7 @@ class TestOrderMaps(unittest.TestCase):
         self.assertIsNone(canonical_name(set()))
 
 
-class TestPickCandidate(unittest.TestCase):
-    def setUp(self):
-        self.ordered = [
-            (Box(100, 0, 1, 1, name="SL-3-1"), {"SL-3-1"}),
-            (Box(400, 0, 1, 1, name="3-1"), {"3-1"}),
-            (Box(700, 0, 1, 1, name="SL-3-2"), {"SL-3-2"}),
-            (Box(1000, 0, 1, 1, name="3-2"), {"3-2"}),
-        ]
-
-    def test_left_to_right_skipping(self):
-        self.assertEqual(pick_candidate(self.ordered, set())[0].name, "SL-3-1")
-        self.assertEqual(pick_candidate(self.ordered, {"SL-3-1"})[0].name, "3-1")
-        self.assertEqual(pick_candidate(self.ordered, {"SL-3-1", "3-1"})[0].name, "SL-3-2")
-        self.assertIsNone(pick_candidate(self.ordered, {"SL-3-1", "3-1", "SL-3-2", "3-2"}))
-
-    def test_cursor_only_moves_right(self):
-        # 3-1 作为游标 -> 它左边的 SL-3-1 不再考虑，下一张是右边的 SL-3-2
-        self.assertEqual(pick_candidate(self.ordered, {"3-1"}, cursor="3-1")[0].name, "SL-3-2")
-        self.assertEqual(pick_candidate(self.ordered, {"3-1", "SL-3-2"}, cursor="3-1")[0].name, "3-2")
-        self.assertIsNone(pick_candidate(self.ordered, {"3-1", "3-2", "SL-3-2"}, cursor="3-1"))
-
-    def test_cursor_not_visible_falls_back_to_leftmost(self):
-        self.assertEqual(pick_candidate(self.ordered, set(), cursor="3-9")[0].name, "SL-3-1")
-
-    def test_group_partial_overlap_counts(self):
-        ordered = [(Box(100, 0, 1, 1, name="2-5"), {"2-5", "2-5*"})]
-        self.assertIsNone(pick_candidate(ordered, {"2-5*"}))
-
+class TestPanelParsing(unittest.TestCase):
     def test_classify_panel(self):
         # SL-5-3 实录：面板动画里只先认出「特殊奖励」，按钮还没出来 -> unknown，不能当未解锁
         self.assertEqual(classify_panel(True, False, True, [], []), ("unknown", None))
