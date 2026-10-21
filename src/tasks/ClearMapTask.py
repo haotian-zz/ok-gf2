@@ -4,7 +4,7 @@ from collections import Counter
 
 from ok import Logger
 
-from src.core.BaseGfTask import pop_ups, BaseGfTask, map_re, chapter_select_re
+from src.core.BaseGfTask import pop_ups, BaseGfTask, map_re, chapter_select_re, nav_tabs_re
 from src.core.stage_card import MEDAL_BOX, has_clear_badge, medal_re, parse_medals
 from src.image.hsv_config import HSVRange as hR
 
@@ -34,6 +34,9 @@ STAGE_MAX_ATTEMPTS = 2  # 同一关一次推图里最多打几次
 ENSURE_MAP_TRIES = 4  # 看不到关卡时最多恢复几次
 PASS_MAX_STEPS = 300  # 一遍扫描最多处理多少步（防止死循环）
 MAP_DRAG_Y = 0.2  # 拖地图时按住的高度：卡片都在 0.3~0.75，这一带是空白背景，不会点到卡片
+# 打完/看完一关后「回到选关」的标志：地图卡片、章节选择页的「章节进度」、或作战页顶上的页签。
+# 实录 2026-10-21 15.0 章：看完剧情落在章节选择页，「章节进度」四个字 OCR 没读到、页签读到了，白等了 120 秒
+BACK_TO_MAP = [map_re, chapter_select_re, nav_tabs_re]
 STATUS_TEXT = {"cleared": "已通关（面板没有首通奖励）, 跳过", "locked": "未解锁, 先推其他关卡", "nopanel": "没读到关卡面板, 跳过",
                "unknown": "面板反复读不到按钮, 跳过", "skip": "跳过"}
 
@@ -431,7 +434,7 @@ class ClearMapTask(BaseGfTask):
                 or self.find_boxes(boxes, match="继续前进")
             ):
                 self.log_info("当前在部署界面或战斗中，先打完这一关再继续推图", notify=True)
-                self.auto_battle(end_match=[map_re, chapter_select_re], has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False))
+                self.auto_battle(end_match=BACK_TO_MAP, has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False))
                 self.reenter_from_chapter_select()
                 self.close_map_panel()
                 return True
@@ -574,12 +577,12 @@ class ClearMapTask(BaseGfTask):
             # 看完/打完游戏可能退回地图、章节选择页，甚至停在剧情或结算上；结束条件宽一点，剩下的交给 ensure_map
             if status == "challenge":
                 self.auto_battle(
-                    end_match=[map_re, chapter_select_re],
+                    end_match=BACK_TO_MAP,
                     has_dialog=True,
                     need_click_auto=self.config.get("战斗内点击自动", False),
                 )
             else:
-                self.skip_dialogs(end_match=[map_re, chapter_select_re], raise_if_not_found=False)
+                self.skip_dialogs(end_match=BACK_TO_MAP, raise_if_not_found=False)
             played += 1
             handled.update(group)
             done.update(group)

@@ -22,9 +22,9 @@ consts = [
     n
     for n in tree.body
     if isinstance(n, ast.Assign)
-    and any(isinstance(t, ast.Name) and t.id in ("CHAPTER_MAX_PASSES", "STAGE_MAX_ATTEMPTS", "ENSURE_MAP_TRIES", "PASS_MAX_STEPS", "STATUS_TEXT", "MAP_DRAG_Y", "CHAPTER_VERIFY_ROUNDS") for t in n.targets)
+    and any(isinstance(t, ast.Name) and t.id in ("CHAPTER_MAX_PASSES", "STAGE_MAX_ATTEMPTS", "ENSURE_MAP_TRIES", "PASS_MAX_STEPS", "STATUS_TEXT", "MAP_DRAG_Y", "CHAPTER_VERIFY_ROUNDS", "BACK_TO_MAP") for t in n.targets)
 ]
-ns = {"re": re, "Counter": Counter, "map_re": re.compile("x"), "chapter_select_re": re.compile("^章节进度$")}
+ns = {"re": re, "Counter": Counter, "map_re": re.compile("x"), "chapter_select_re": re.compile("^章节进度$"), "nav_tabs_re": re.compile("剧情战役|模拟作战")}
 ns["has_clear_badge"] = lambda frame, card, w, h: frame.badge(card)
 exec(compile(ast.Module(body=consts + funcs + methods, type_ignores=[]), str(source), "exec"), ns)
 
