@@ -114,6 +114,15 @@ class SkipDialogsOnMapTest(unittest.TestCase):
         )
         self.assertLess(ns["time"].time() - start, 1)
 
+    def test_chapter_select_without_progress_text_ends_by_nav_tabs(self):
+        """实录 2026-10-21 15.0 章：看完剧情落在章节选择页，「章节进度」没读到、只读到页签，不能干等到超时。"""
+        page = [box("剧情战役"), box("の"), box("往期活动"), box("Supply Missions"), box("模拟作战")]
+        task = self.make_task(page)
+        end = [map_re, ns["chapter_select_re"], ns["nav_tabs_re"]]
+        result = skip_dialogs(task, end_match=end, time_out=5, has_dialog=True, raise_if_not_found=True)
+        self.assertIn("剧情战役", [b.name for b in result])
+        task.click_relative.assert_not_called()
+
     def test_map_in_end_match_returns_map_boxes(self):
         task = self.make_task([box("9-7"), box("普通")])
         result = skip_dialogs(task, end_match=["任务完成", map_re], time_out=1, has_dialog=True, raise_if_not_found=False)
