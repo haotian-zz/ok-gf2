@@ -17,6 +17,7 @@ from src.core.support_select import (
     check_point,
     COUNT_BOX,
     empty_tiles,
+    fallback_empty_tiles,
     far_point,
     filter_point,
     find_cards,
@@ -192,6 +193,9 @@ def parse_time_option(option: str) -> list[float]:
     例如 "1.087-1.4-0.5" -> [1.087, 1.4, 0.5]
     """
     return [float(x) for x in option.split("-")]
+
+
+must_deploy_re = re.compile(r"至少需要出击")
 
 
 def battle_over_on_map(results):
@@ -892,8 +896,10 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             out = [(c, f"有人的地格({int(c[0])},{int(c[1])})") for c in occupied]
         else:
             out = [(t["center"], f"空地格({int(t['center'][0])},{int(t['center'][1])}, 填充 {t['fill']})") for t in empty]
+            extra = fallback_empty_tiles(self.frame, self.width, self.height, [c for c, _ in out], occupied)
+            out += [(c, f"兜底地格({int(c[0])},{int(c[1])})") for c in extra]
         self.log_info(f"阵容 {count}，候选地格 {len(out)} 个", notify=False)
-        return out[:4]
+        return out[:6]
 
     def _placed(self, card_name, before):
         """核对是否上场：按钮是「撤回人形」且左下角名字就是这张卡，或者计数涨了。"""
@@ -1531,6 +1537,7 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                     self._clear_selection()
                 result = self.wait_ocr(match="作战开始", box=self.box.bottom, time_out=10, raise_if_not_found=True)
             self.click_box(result, after_sleep=1)
+            must_full = False
             for _ in range(2):
                 # 地图上挂着选中时点「作战开始」只会把面板弹出来，战斗不会开始；清掉选中再点一次
                 self.sleep(2)
@@ -1542,10 +1549,23 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                     # 实录 2026-10-20：「还有可部署的单位」确认框是半透明的，后面的「作战开始」还能 OCR 到；
                     # 这不是没点上，交给下面的 skip_dialogs 点确认
                     break
+                if must := self.ocr(match=must_deploy_re):
+                    # 实录 2026-10-20 BH-9-4：点作战开始只闪一下「本关至少需要出击4人!」，人没满开不了战
+                    self.log_info(f"游戏提示「{must[0].name}」，再补一次人", notify=True)
+                    self.debug_shot("must_deploy")
+                    must_full = True
+                    self._ensure_panel()
+                    self.fill_lineup()
                 self.log_info("点了作战开始但还在部署界面，清掉选中后再点", notify=True)
                 self.debug_shot("battle_start_retry")
                 self._clear_selection()
                 self.click_box(still, after_sleep=1)
+            if must_full:
+                self.sleep(2)
+                self.next_frame()
+                if self.ocr(match="作战开始", box=self.box.bottom) and not self.ocr(match=re.compile("还有可部署")):
+                    count = self._deploy_count()
+                    raise Exception(f"本关要求出击人数补不满（当前 {count}），请手动部署后再启动推图")
             start_result = self.skip_dialogs(
                 end_match=[
                     re.compile("行动完成"),

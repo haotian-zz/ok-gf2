@@ -633,3 +633,20 @@ def support_point_candidates(frame, width, height):
     primary = find_deploy_tiles(frame, width, height)
     loose = sorted(find_tiles(frame, width, height), key=lambda t: -t.get("sat", 0))
     return [t["center"] for t in merge_tiles(primary, loose, min_dist=0.03 * height)]
+
+
+def fallback_empty_tiles(frame, width, height, known, occupied, min_dist_ratio=0.03):
+    """
+    补人的兜底候选：宽松蓝色连通域里离已知候选和有人的格子都远的，按饱和度从高到低。
+    实录 2026-10-20 BH-9-4：第 4 个空格被助战大机甲挡住一部分，菱形模板没认出来，脚本把有人的格子当成唯一空格，
+    每张卡都点到春田身上；宽松连通域能找到那个空格。
+    """
+    gap = (min_dist_ratio * height) ** 2
+    taken = list(known) + list(occupied)
+    out = []
+    for t in sorted(find_tiles(frame, width, height), key=lambda t: -t.get("sat", 0)):
+        c = t["center"]
+        if all((c[0] - x) ** 2 + (c[1] - y) ** 2 >= gap for x, y in taken):
+            out.append(c)
+            taken.append(c)
+    return out
