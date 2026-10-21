@@ -26,7 +26,10 @@ CHAPTER_BADGE_MAX_X = 0.015  # 当前章的「9.0」角标贴着左边（x≈13/
 chapter_badge_re = re.compile(r"\d+\s*\.\s*\d\s*$")
 chapter_title_re = re.compile(r"[\u4e00-\u9fff]{2,}")
 chapter_noise_re = re.compile(r"^C\s*-|猎人评定|同调演练|剧情战役|往期活动|模拟作战|补给作战")
-chapter_select_words = ["章节进度"]
+# 不要求整段相等：OCR 常把标签和百分比连成一个框（实录 14.0 章「章节进度1100%」）
+chapter_select_words = [re.compile(r"章节进度")]
+# 章节选择页左下角的两个入口，别的作战页签没有
+chapter_select_marks_re = re.compile(r"猎人评定|同调演练")
 campaign_re = re.compile(r"战役推进")  # 游戏主页右上角的作战入口
 
 CHAPTER_VERIFY_ROUNDS = 4  # 推完一章后按「章节进度」核对，最多回去再扫几轮
@@ -526,13 +529,16 @@ class ClearMapTask(BaseGfTask):
     # ------------------------------------------------------------------ 持续推进
     def on_chapter_select(self):
         """
-        当前是不是章节选择页：右下有「章节进度」，或者顶上有作战页签、右下有「普通 / 困难」切换。
-        实录 2026-10-21 8.7 章：「章节进度」叠在立绘上 OCR 读不出，旧逻辑以为不在章节选择页，连按 ESC 退到了「战役推进」。
+        当前是不是章节选择页：右下有「章节进度」，或者顶上有作战页签、并且右下有「普通 / 困难」切换或左下有「猎人评定 / 同调演练」。
+        实录 2026-10-21 8.7 章：「章节进度」叠在立绘上 OCR 读不出，旧逻辑以为不在章节选择页，连按 ESC 退到了「战役推进」；
+        14.0 章：「章节进度1100%」连成一个框，这一章又没有困难模式（没有「普通 / 困难」切换）。
         """
         if self.ocr(match=chapter_select_words, box="bottom_right"):
             return True
-        return bool(self.ocr(box="top", match=nav_tabs_re)) and bool(
-            self.ocr(box="bottom_right", match=difficulty_re)
+        if not self.ocr(box="top", match=nav_tabs_re):
+            return False
+        return bool(self.ocr(box="bottom_right", match=difficulty_re)) or bool(
+            self.ocr(box="bottom_left", match=chapter_select_marks_re)
         )
 
     def open_campaign_from_main(self):

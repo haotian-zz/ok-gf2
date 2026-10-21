@@ -44,6 +44,7 @@ consts = [
             "HERO_STATE_BOX",
             "chapter_no_re",
             "chapter_select_words",
+            "chapter_select_marks_re",
         )
         for t in n.targets
     )
@@ -216,6 +217,14 @@ class OnChapterSelectTest(unittest.TestCase):
     def test_progress_hidden_by_art(self):
         # 实录 8.7 章：「章节进度」叠在立绘上读不出，顶上页签和右下「普通 / 困难」都在
         self.assertTrue(self.check(["剧情战役", "往期活动", "100%", "普通", "困难", "确认"]))
+
+    def test_progress_glued_to_percent(self):
+        # 实录 14.0 章：「章节进度1100%」连成一个框
+        self.assertTrue(self.check(["章节进度1100%", "33/33"]))
+
+    def test_no_difficulty_toggle_but_bottom_left_entries(self):
+        # 实录 14.0 章：没有困难模式，章节选择页没有「普通 / 困难」切换
+        self.assertTrue(self.check(["剧情战役", "往期活动", "猎人评定", "同调演练", "确认"]))
 
     def test_other_tab_is_not_chapter_select(self):
         self.assertFalse(self.check(["剧情战役", "模拟作战", "确认"]))
