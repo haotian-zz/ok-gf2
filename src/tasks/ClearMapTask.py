@@ -269,11 +269,8 @@ class ClearMapTask(BaseGfTask):
 
     def _run_sweep(self):
         ordered = self.scan_maps()
-        if not ordered and self.ocr(match=chapter_select_words, box="bottom_right"):
-            # 停在章节选择页：点「确认」进当前选中的章节
-            self.log_info("当前在章节选择页，进入选中的章节", notify=True)
-            self.wait_click_ocr(match=self.fix_match_regex(["确认"]), box="bottom_right", time_out=5, after_sleep=3, raise_if_not_found=False)
-            self.skip_dialogs(end_match=map_re, time_out=120, has_dialog=True, raise_if_not_found=False)
+        if not ordered and self.reenter_from_chapter_select():
+            # 停在章节选择页（或作战的其他页签）：进当前选中的章节
             ordered = self.scan_maps()
         if not ordered:
             # 不在选关页面：可能停在部署界面、战斗中或结算页（比如上次手动停止），先把这一关收尾再继续
@@ -315,9 +312,18 @@ class ClearMapTask(BaseGfTask):
         return bool(self.ocr(match=chapter_select_words, box="bottom_right"))
 
     def reenter_from_chapter_select(self):
-        """打完 / 看完一关后游戏退回了章节选择页：点「确认」进回选中的章节。返回是否进去了。"""
+        """
+        打完 / 看完一关后游戏退回了章节选择页：点「确认」进回选中的章节。返回是否进去了。
+        停在「模拟作战 / 往期活动 / 补给作战」页签时先点「剧情战役」页签回到章节选择页。
+        """
         if not self.ocr(match=chapter_select_words, box="bottom_right"):
-            return False
+            tab = self.ocr(box="top", match=re.compile(r"^剧情战役$"))
+            if not tab:
+                return False
+            self.log_info("停在作战的其他页签上，切回「剧情战役」", notify=True)
+            self.click(tab, after_sleep=2)
+            if not self.wait_ocr(match=chapter_select_words, box="bottom_right", time_out=5, raise_if_not_found=False):
+                return False
         self.log_info("回到了章节选择页，点确认进回章节继续推", notify=True)
         self.debug_shot("back_on_chapter_select")
         if not self.wait_click_ocr(match=self.fix_match_regex(["确认"]), box="bottom_right", time_out=5, after_sleep=3, raise_if_not_found=False):
