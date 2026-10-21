@@ -58,8 +58,13 @@ def main():
     parser.add_argument("--frameless", action="store_true", help="无边框窗口，用界面自绘的标题栏")
     args = parser.parse_args()
 
+    try:
+        import webview
+    except ImportError:
+        raise SystemExit(
+            "新版界面的窗口需要 pywebview：先运行 .venv\\Scripts\\pip install pywebview，或改用 tools\\serve_web_v2.py 在浏览器里打开"
+        )
     app, uvicorn = build_app()
-    import webview
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((args.host, args.port))
