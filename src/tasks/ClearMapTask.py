@@ -60,6 +60,9 @@ DIFFICULTY_MIN_FILL = 0.3
 HERO_FROM_CHAPTER = 11
 hero_button_re = re.compile(r"英雄难度")
 hero_state_re = re.compile(r"开启中|未开启")  # 不锚定：拨完开关那几帧 OCR 可能把旁边的图标连进来
+# 只在窗口底部开关那一条里读状态：整个下半屏一起 OCR 时，上面说明文字一多「未开启」就检测不出来
+# （实录 2026-10-21 13.0 章：截图里清清楚楚的「未开启」，下半屏 OCR 只读到了说明文字）
+HERO_STATE_BOX = (0.55, 0.72, 0.92, 0.84)
 HERO_SWITCH_DX = 0.088  # 拨动开关中心在状态文字中心右边多远（按画面高）
 chapter_no_re = re.compile(r"(\d{1,2})\s*\.\s*\d")
 
@@ -479,7 +482,13 @@ class ClearMapTask(BaseGfTask):
         on = None
         misses = 0
         for _ in range(4):
-            state = self.wait_ocr(box="bottom", match=hero_state_re, time_out=5, log=True, raise_if_not_found=False)
+            state = self.wait_ocr(
+                box=self.box_of_screen(*HERO_STATE_BOX),
+                match=hero_state_re,
+                time_out=5,
+                log=True,
+                raise_if_not_found=False,
+            )
             if not state:
                 # 实录 2026-10-21 12.0 章：拨完开关后 3 秒没读到状态文字，截图里其实已经是「开启中」，再读一次
                 misses += 1
@@ -499,7 +508,7 @@ class ClearMapTask(BaseGfTask):
         self.debug_shot("hero_dialog")
         # 关窗口：ESC。窗口不在时 ESC 会退回章节选择页，所以确认窗口还在才按
         for _ in range(3):
-            if not self.ocr(box="bottom", match=hero_state_re):
+            if not self.ocr(box=self.box_of_screen(*HERO_STATE_BOX), match=hero_state_re):
                 break
             self.back(after_sleep=1.5)
         self.ensure_map()

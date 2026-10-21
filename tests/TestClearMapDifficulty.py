@@ -41,6 +41,7 @@ consts = [
             "hero_button_re",
             "hero_state_re",
             "HERO_SWITCH_DX",
+            "HERO_STATE_BOX",
             "chapter_no_re",
             "chapter_select_words",
         )
@@ -177,6 +178,9 @@ class FakeTask:
 
     def log_info(self, msg, notify=False):
         self.log.append(msg)
+
+    def box_of_screen(self, x, y, to_x, to_y):
+        return ("box", x, y, to_x, to_y)
 
     def debug_shot(self, *a, **kw):
         pass
