@@ -381,6 +381,8 @@ class ClearMapTask(BaseGfTask):
             processors = [None, self.make_hsv_isolator(hR.WHITE), self.make_hsv_isolator(hR.WHITE_GRAY)]
         self.processors = processors
 
+        # 开推前还不知道本章是不是英雄难度：先按配置算（停在英雄难度的失败结算页启动时要能点确认回地图），每章开推前再按实际改
+        self.hero_mode = bool(self.config.get("英雄难度", False))
         self.log_info("推图开始", notify=False)
         self.reset_lineup("推图")  # 每次启动任务只在第一场整理阵容，之后沿用
         self.start_watchdog()
