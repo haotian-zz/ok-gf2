@@ -444,12 +444,15 @@ class ClearMapTask(BaseGfTask):
             boxes = self.ocr()
             if self.find_boxes(boxes, match=map_re):
                 return True
+            # 「任务完成」结算页也交给 auto_battle：它会点掉结算，再看有没有「继续前进」
+            # （实录 2026-10-21：重启后停在剧情→结算页，这里没认「任务完成」，和 skip_dialogs 互相踢皮球卡了 15 分钟）
             if (
                 self.find_boxes(boxes, match="作战开始")
                 or self._is_battle_frame(boxes)
                 or self.find_boxes(boxes, match="继续前进")
+                or self.find_boxes(boxes, match="任务完成")
             ):
-                self.log_info("当前在部署界面或战斗中，先打完这一关再继续推图", notify=True)
+                self.log_info("当前在部署界面、战斗中或结算页，先打完这一关再继续推图", notify=True)
                 self.auto_battle(
                     end_match=BACK_TO_MAP, has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False)
                 )
@@ -474,7 +477,8 @@ class ClearMapTask(BaseGfTask):
                 has_dialog=True,
                 raise_if_not_found=False,
             )
-            if not found and unknown >= 2:
+            if (not found and unknown >= 2) or unknown >= 6:
+                # 跳过剧情一直等到的是这里也处理不了的画面，别原地转圈，交回给 ensure_map 走别的恢复方式
                 self.debug_shot("resume_unknown", boxes)
                 return False
         return False
