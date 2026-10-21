@@ -3,7 +3,7 @@ import time
 
 from ok import Logger
 
-from src.core.BaseGfTask import pop_ups, BaseGfTask, map_re
+from src.core.BaseGfTask import pop_ups, BaseGfTask, map_re, chapter_select_re
 from src.image.hsv_config import HSVRange as hR
 
 logger = Logger.get_logger(__name__)
@@ -314,6 +314,17 @@ class ClearMapTask(BaseGfTask):
             self.back(after_sleep=2)
         return bool(self.ocr(match=chapter_select_words, box="bottom_right"))
 
+    def reenter_from_chapter_select(self):
+        """打完 / 看完一关后游戏退回了章节选择页：点「确认」进回选中的章节。返回是否进去了。"""
+        if not self.ocr(match=chapter_select_words, box="bottom_right"):
+            return False
+        self.log_info("回到了章节选择页，点确认进回章节继续推", notify=True)
+        self.debug_shot("back_on_chapter_select")
+        if not self.wait_click_ocr(match=self.fix_match_regex(["确认"]), box="bottom_right", time_out=5, after_sleep=3, raise_if_not_found=False):
+            return False
+        self.skip_dialogs(end_match=map_re, time_out=120, has_dialog=True, raise_if_not_found=False)
+        return True
+
     def enter_next_chapter(self):
         """
         回章节选择页，点当前章下面那一章：右侧章节信息变了说明已选中（解锁了），点「确认」进去并跳过开场剧情；
@@ -367,7 +378,8 @@ class ClearMapTask(BaseGfTask):
                 or self.find_boxes(boxes, match="继续前进")
             ):
                 self.log_info("当前在部署界面或战斗中，先打完这一关再继续推图", notify=True)
-                self.auto_battle(end_match=map_re, has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False))
+                self.auto_battle(end_match=[map_re, chapter_select_re], has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False))
+                self.reenter_from_chapter_select()
                 self.close_map_panel()
                 return True
             if self.find_boxes(boxes, match="任务失败"):
@@ -422,11 +434,14 @@ class ClearMapTask(BaseGfTask):
         cursor = None  # 进度游标：最近一次处理过的关卡名，只往它右边推
         last_scroll = None  # 上次为了往右看而点击的最右卡片名
         rewound = False  # 本轮是否已经回到章节起点重查过未解锁的关卡
+        pushed_since_rewind = False  # 上次从章节起点开扫以来推过关卡（可能解锁了游标左边的支线）
         unknown_tries = {}  # 面板读不出按钮的关卡 -> 已重试次数
 
         while True:
             self.sleep(1)
             ordered = self.scan_maps()
+            if not ordered and self.reenter_from_chapter_select():
+                ordered = self.scan_maps()
             if not ordered:
                 raise Exception("选关页面上没有识别到关卡, 请检查游戏画面")
 
@@ -442,11 +457,15 @@ class ClearMapTask(BaseGfTask):
                     self.click(rightmost, after_sleep=1.5)
                     self.close_map_panel()
                     continue
-                if locked and not rewound:
-                    # 未解锁的关卡可能在游标左边、甚至已经滚出屏幕（比如 SL-5-3 在 BH-5-1 左边），
-                    # 回到章节起点不带游标重新核实一遍
-                    self.log_info(f"右边没有可推的关卡，回章节起点重查未解锁的 {sorted(locked)}", notify=False)
+                if pushed_since_rewind or (locked and not rewound):
+                    # 未解锁的关卡可能在游标左边、甚至已经滚出屏幕（比如 SL-5-3 在 BH-5-1 左边）；
+                    # 推过的关卡也可能解锁了游标左边的支线（实录 2026-10-20：10-8 打完后 BH-10-3 解锁，
+                    # 但它在 10-10 左边，游标停在 10-10 时被跳过）。回章节起点不带游标重新扫一遍，
+                    # 直到某一遍从头扫到尾一关都没推。
+                    why = "推过关卡，可能解锁了左边的支线" if pushed_since_rewind else f"重查未解锁的 {sorted(locked)}"
+                    self.log_info(f"右边没有可推的关卡，回章节起点再扫一遍（{why}）", notify=False)
                     rewound = True
+                    pushed_since_rewind = False
                     locked.clear()
                     cursor = None
                     last_scroll = None
@@ -490,14 +509,15 @@ class ClearMapTask(BaseGfTask):
 
             # challenge / watch
             self.click(action, after_sleep=2)
+            # 实录 2026-10-20：看完 SL-10-6 剧情游戏退回了章节选择页，所以章节选择页也算结束，下一轮扫描前再点确认进回来
             if status == "challenge":
                 self.auto_battle(
-                    end_match=map_re,
+                    end_match=[map_re, chapter_select_re],
                     has_dialog=True,
                     need_click_auto=self.config.get("战斗内点击自动", False),
                 )
             else:
-                self.skip_dialogs(end_match=map_re)
+                self.skip_dialogs(end_match=[map_re, chapter_select_re])
             count += 1
             session_done.update(group)
             cursor = name
@@ -506,7 +526,7 @@ class ClearMapTask(BaseGfTask):
                 locked.clear()
                 cursor = None
             last_scroll = None
-            rewound = False
+            pushed_since_rewind = True
             self.close_map_panel()
 
 

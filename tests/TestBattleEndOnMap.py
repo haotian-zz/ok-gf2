@@ -20,7 +20,7 @@ consts = [
     n
     for n in tree.body
     if isinstance(n, ast.Assign)
-    and any(isinstance(t, ast.Name) and t.id in ("pop_ups", "map_re", "stamina_popup_re", "battle_ui_re", "challenge_button_re") for t in n.targets)
+    and any(isinstance(t, ast.Name) and t.id in ("pop_ups", "map_re", "stamina_popup_re", "battle_ui_re", "challenge_button_re", "nav_tabs_re", "chapter_select_re") for t in n.targets)
 ]
 ns = {"re": re, "time": __import__("time")}
 exec(compile(ast.Module(body=consts + funcs + methods, type_ignores=[]), str(source), "exec"), ns)
@@ -57,6 +57,11 @@ class BattleOverTest(unittest.TestCase):
         self.assertIn("物品详情", pop_ups)
 
 
+class ChapterSelectEndTest(unittest.TestCase):
+    def test_chapter_select_page_means_battle_is_over(self):
+        self.assertTrue(battle_over_on_map([box("章节进度"), box("确认")]))
+
+
 class SkipDialogsOnMapTest(unittest.TestCase):
     def make_task(self, boxes):
         task = Mock()
@@ -72,6 +77,16 @@ class SkipDialogsOnMapTest(unittest.TestCase):
         self.assertIsNone(skip_dialogs(task, end_match=["任务完成"], time_out=0.01, has_dialog=True, raise_if_not_found=False))
         task.click_relative.assert_not_called()
         task.click.assert_not_called()
+
+    def test_no_corner_clicks_on_navigation_pages(self):
+        # 实录 2026-10-20：章节选择页 / 模拟作战页右上角是「模拟作战」页签，点了会跑进模拟作战
+        for page in (
+            [box("剧情战役"), box("往期活动"), box("Supply Missions"), box("模拟作战"), box("章节进度"), box("确认")],
+            [box("剧情战役"), box("往期活动"), box("模拟作战"), box("心智勘测"), box("首领挑战"), box("实兵演习")],
+        ):
+            task = self.make_task(page)
+            skip_dialogs(task, end_match=[map_re], time_out=0.01, has_dialog=True, raise_if_not_found=False)
+            task.click_relative.assert_not_called()
 
     def test_unknown_page_still_gets_corner_clicks(self):
         task = self.make_task([box("……")])

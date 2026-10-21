@@ -196,11 +196,15 @@ def parse_time_option(option: str) -> list[float]:
 
 
 must_deploy_re = re.compile(r"至少需要出击")
+# 作战页顶部的导航页签：出现说明在章节选择 / 模拟作战等导航页，没有剧情可跳。
+# 实录 2026-10-20：看完 SL-10-6 剧情退回章节选择页，skip_dialogs 点右上角「跳过」的位置正好是「模拟作战」页签
+nav_tabs_re = re.compile(r"剧情战役|往期活动|补给作战|模拟作战|Supply\s*Missions")
+chapter_select_re = re.compile(r"^章节进度$")
 
 
 def battle_over_on_map(results):
-    """等结算时等到的是选关页面的关卡名：战斗已经结束（结算页被点过去了），不用再点任何东西。"""
-    return bool(results) and any(map_re.match(r.name) for r in results)
+    """等结算时等到的是选关页面的关卡名或章节选择页：战斗已经结束（结算页被点过去了），不用再点任何东西。"""
+    return bool(results) and any(map_re.match(r.name) or chapter_select_re.match(r.name) for r in results)
 
 
 def parse_deploy_count(text):
@@ -536,8 +540,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 if self._is_battle_frame(boxes) or self._is_loading_frame(boxes):
                     # 游戏在打/在加载，不算卡住，喂一下看门狗
                     self._touch_progress()
-                if has_dialog and self.find_boxes(boxes, match=map_re):
-                    # 实录 2026-10-20：选关页面右上角是货币和「+」，真实输入下乱点会弹出「物品详情」，这里什么都别点
+                if has_dialog and (self.find_boxes(boxes, match=map_re) or self.find_boxes(boxes, match=nav_tabs_re)):
+                    # 实录 2026-10-20：选关页面右上角是货币和「+」，真实输入下乱点会弹出「物品详情」；
+                    # 章节选择页右上角是「模拟作战」页签，乱点会跑进模拟作战。导航页上什么都别点
                     pass
                 elif has_dialog and not self._is_loading_frame(boxes) and not self._is_battle_frame(boxes):
                     # 剧情跳过标签在 (0.95, 0.04)，教学弹窗的关闭 X 在 (0.967, 0.042)，交替点两处
@@ -1640,12 +1645,12 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         clicked_continue = False
         while results := self.skip_dialogs(
             # 实录 2026-10-20：真实输入下角落点击会把结算页点过去，等到的直接是选关页面，也算打完了
-            end_match=["任务完成", "任务失败", "战斗失败", "对战胜利", "对战失败", "确认", "确认结算", "继续前进", map_re],
+            end_match=["任务完成", "任务失败", "战斗失败", "对战胜利", "对战失败", "确认", "确认结算", "继续前进", map_re, chapter_select_re],
             time_out=900,
             has_dialog=has_dialog,
         ):
             if battle_over_on_map(results):
-                self.log_info("结算页已经过去，回到了选关页面", notify=False)
+                self.log_info("结算页已经过去，回到了选关页面 / 章节选择页", notify=False)
                 break
             # 优先遍历所有结果找"继续前进"
             clicked = False
