@@ -15,6 +15,67 @@ PANEL_WORDS = ["特殊奖励", "观看", "挑战", "完成前置关卡解锁"]
 BUTTON_RE = [re.compile(r"^观\s*看?$"), re.compile(r"^挑\s*战?$")]
 BUTTON_MIN_Y = 0.85  # 按钮在面板最底下，只认 y 在这以下的框，避免描述文字里的字混进来
 
+# ------------------------------------------------------------------ 章节选择页（持续推进用，实录 2026-10-20）
+# 从章节地图按 ESC 回到章节选择页：左边一列章节标题，当前章前面有「9.0」这样的高亮角标，后面的章节往下排，
+# 未解锁的带锁、点了没有任何反应；右下是「章节进度 57% / 27/48 / 一句简介」和「确认」。
+CHAPTER_LIST_MAX_X = 0.2  # 章节标题都在画面左边 20% 以内
+CHAPTER_LIST_MAX_Y = 0.85  # 再往下是「猎人评定 / 同调演练」入口
+CHAPTER_BADGE_MAX_X = 0.015  # 当前章的「9.0」角标贴着左边（x≈13/2560）；其他章前面的「C-11.0」小字在 x≈69
+chapter_badge_re = re.compile(r"\d+\s*\.\s*\d\s*$")
+chapter_title_re = re.compile(r"[\u4e00-\u9fff]{2,}")
+chapter_noise_re = re.compile(r"^C\s*-|猎人评定|同调演练|剧情战役|往期活动|模拟作战|补给作战")
+chapter_select_words = ["章节进度"]
+
+
+class ChapterLocked(Exception):
+    """本章剩下的关卡都未解锁。"""
+
+
+def chapter_titles(boxes, width, height):
+    """章节选择页左列的章节标题框，从上到下。"""
+    out = []
+    for b in boxes:
+        name = (b.name or "").strip()
+        if b.x > CHAPTER_LIST_MAX_X * width or b.y > CHAPTER_LIST_MAX_Y * height or b.y < 0.08 * height:
+            continue
+        if chapter_noise_re.search(name) or not chapter_title_re.search(name):
+            continue
+        out.append(b)
+    return sorted(out, key=lambda b: b.y)
+
+
+def current_and_next_chapter(boxes, width, height):
+    """(当前章标题框, 下一章标题框)。当前章按「9.0」角标所在行认，角标没读到就当最上面那个是当前章。"""
+    titles = chapter_titles(boxes, width, height)
+    if not titles:
+        return None, None
+    badges = [
+        b
+        for b in boxes
+        if b.x <= CHAPTER_BADGE_MAX_X * width and chapter_badge_re.search(b.name or "") and not (b.name or "").strip().startswith("C")
+    ]
+    if badges:
+        by = badges[0].y + badges[0].height / 2
+        current = min(titles, key=lambda t: abs(t.y + t.height / 2 - by))
+    else:
+        current = titles[0]
+    later = [t for t in titles if t.y > current.y + current.height / 2]
+    return current, (later[0] if later else None)
+
+
+chapter_progress_re = re.compile(r"^\s*\d{1,3}\s*%\s*$|^\s*\d{1,3}\s*/\s*\d{1,3}\s*$")
+
+
+def chapter_signature(boxes, width, height):
+    """
+    选中了哪一章的指纹：右侧「57%」「27/48」两个数字 + 左边角标所在行。
+    点锁着的章节什么都不变；简介那句话 OCR 时有时无句号，不拿来比。
+    """
+    nums = tuple(sorted((b.name or "").replace(" ", "") for b in boxes if b.x > 0.6 * width and chapter_progress_re.match(b.name or "")))
+    current, _ = current_and_next_chapter(boxes, width, height)
+    return nums, (current.name if current else None)
+
+
 
 def button_kind(text):
     """按钮文字 -> watch / challenge / None，容忍只读到第一个字。"""
@@ -81,13 +142,14 @@ class ClearMapTask(BaseGfTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.name = "推图"
-        self.description = "停在任意关卡页面启动即可，会先回到章节起点再从左到右推完所有未通关的关卡"
+        self.description = "停在任意关卡页面或章节选择页启动即可，先回章节起点从左到右推完未通关的关卡，推完自动进下一章"
         self.default_config.update(
             {
                 "普通OCR": True,
                 "除杂色OCR1": True,
                 "除杂色OCR2": True,
                 "战斗内点击自动": False,
+                "推完继续下一章": True,
             }
         )
         self.config_description.update(
@@ -107,6 +169,10 @@ class ClearMapTask(BaseGfTask):
                 "战斗内点击自动": (
                     "进入战斗后若检测到「行动结束」，自动点击右上角的自动战斗按钮\n"
                     "默认关闭，依赖游戏内全局自动（设置→其他→自动战斗设置）；未开全局自动时再打开"
+                ),
+                "推完继续下一章": (
+                    "本章能推的都推完（或剩下的都没解锁）后，回章节选择页进入下一章继续推\n"
+                    "下一章没解锁（带锁、点了没反应）就正常结束"
                 ),
             }
         )
@@ -197,6 +263,12 @@ class ClearMapTask(BaseGfTask):
 
     def _run_sweep(self):
         ordered = self.scan_maps()
+        if not ordered and self.ocr(match=chapter_select_words, box="bottom_right"):
+            # 停在章节选择页：点「确认」进当前选中的章节
+            self.log_info("当前在章节选择页，进入选中的章节", notify=True)
+            self.wait_click_ocr(match=self.fix_match_regex(["确认"]), box="bottom_right", time_out=5, after_sleep=3, raise_if_not_found=False)
+            self.skip_dialogs(end_match=map_re, time_out=120, has_dialog=True, raise_if_not_found=False)
+            ordered = self.scan_maps()
         if not ordered:
             # 不在选关页面：可能停在部署界面、战斗中或结算页（比如上次手动停止），先把这一关收尾再继续
             if not self.resume_battle():
@@ -205,9 +277,70 @@ class ClearMapTask(BaseGfTask):
             if not ordered:
                 raise Exception("收尾后仍未回到选关页面, 请检查游戏画面")
 
-        self.go_to_chapter_start()
-        count = self.sweep_right()
-        self.log_info(f"推图完成, 本次推进 {count} 关", notify=True)
+        total = 0
+        for _ in range(30):
+            self.go_to_chapter_start()
+            try:
+                count, locked = self.sweep_right(), None
+            except ChapterLocked as e:
+                count, locked = getattr(e, "count", 0), e
+            total += count
+            if not self.config.get("推完继续下一章", True):
+                if locked:
+                    raise locked
+                break
+            nxt = self.enter_next_chapter()
+            if not nxt:
+                if locked:
+                    self.log_info(f"{locked}；下一章也没解锁，推图结束", notify=True)
+                break
+            self.log_info(f"进入下一章「{nxt}」继续推图", notify=True)
+            if not self.scan_maps():
+                raise Exception(f"进入「{nxt}」后没看到关卡, 请检查游戏画面")
+        self.log_info(f"推图完成, 本次推进 {total} 关", notify=True)
+
+    # ------------------------------------------------------------------ 持续推进
+    def open_chapter_select(self):
+        """从章节地图按 ESC 回到章节选择页。"""
+        for _ in range(3):
+            if self.wait_ocr(match=chapter_select_words, box="bottom_right", time_out=3, raise_if_not_found=False):
+                return True
+            self.back(after_sleep=2)
+        return bool(self.ocr(match=chapter_select_words, box="bottom_right"))
+
+    def enter_next_chapter(self):
+        """
+        回章节选择页，点当前章下面那一章：右侧章节信息变了说明已选中（解锁了），点「确认」进去并跳过开场剧情；
+        信息没变（锁着，点了没反应）或已经是最后一章就返回 None，停在章节选择页。返回新章节名。
+        """
+        self.info_set("current_task", "进入下一章")
+        self.close_map_panel()
+        if not self.open_chapter_select():
+            self.log_info("没回到章节选择页，不继续下一章", notify=True)
+            return None
+        self.sleep(1)
+        boxes = self.ocr(log=True)
+        self.debug_shot("chapter_select", boxes)
+        current, nxt = current_and_next_chapter(boxes, self.width, self.height)
+        if nxt is None:
+            self.log_info(f"「{current.name if current else '?'}」后面没有下一章了", notify=True)
+            return None
+        before = chapter_signature(boxes, self.width, self.height)
+        self.click(nxt, after_sleep=1.5)
+        self.next_frame()
+        after_boxes = self.ocr(log=True)
+        if chapter_signature(after_boxes, self.width, self.height) == before:
+            self.log_info(f"下一章「{nxt.name}」还没解锁（点了没反应）", notify=True)
+            self.debug_shot("next_chapter_locked", after_boxes)
+            return None
+        confirm = self.find_boxes(after_boxes, match=self.fix_match_regex(["确认"]))
+        if not confirm:
+            self.log_info(f"选中了「{nxt.name}」但没找到「确认」", notify=True)
+            return None
+        self.click(confirm, after_sleep=3)
+        # 新章节开头常有剧情 / 动画，跳过直到看到关卡卡片
+        self.skip_dialogs(end_match=map_re, time_out=180, has_dialog=True, raise_if_not_found=False)
+        return nxt.name
 
     def resume_battle(self, time_out=1200):
         """
@@ -314,7 +447,9 @@ class ClearMapTask(BaseGfTask):
                     self.go_to_chapter_start()
                     continue
                 if locked:
-                    raise Exception(f"剩余关卡都未解锁({sorted(locked)}), 请检查前置关卡后再启动")
+                    err = ChapterLocked(f"剩余关卡都未解锁({sorted(locked)}), 请检查前置关卡后再启动")
+                    err.count = count
+                    raise err
                 return count
 
             card, group = candidate
