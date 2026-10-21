@@ -621,6 +621,12 @@ class ClearMapTask(BaseGfTask):
                 return True
             if self.find_boxes(boxes, match="任务失败"):
                 self.debug_shot("resume_failed", boxes)
+                # 英雄难度打输是跳过这关接着推：失败结算页「重新挑战 / 战斗重演 / 确认」点确认回地图
+                # （实录 2026-10-21 12.5 章：只点了「任务失败」标题，停在这页，回地图时又当成打输停了）
+                if self.hero_mode and (confirm := self.find_boxes(boxes, match=self.fix_match_regex(["确认"]))):
+                    self.log_info("英雄难度的失败结算页，点确认回地图", notify=False)
+                    self.click(confirm, after_sleep=2)
+                    continue
                 raise BattleLost("任务失败, 没打过!")
             if confirm := self.find_boxes(boxes, match=self.fix_match_regex(["确认", "确认结算"])):
                 self.click(confirm, after_sleep=2)
