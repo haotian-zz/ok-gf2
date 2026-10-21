@@ -22,7 +22,10 @@ BUTTON_MIN_Y = 0.85  # 按钮在面板最底下，只认 y 在这以下的框，
 # 未解锁的带锁、点了没有任何反应；右下是「章节进度 57% / 27/48 / 一句简介」和「确认」。
 CHAPTER_LIST_MAX_X = 0.2  # 章节标题都在画面左边 20% 以内
 CHAPTER_LIST_MAX_Y = 0.85  # 再往下是「猎人评定 / 同调演练」入口
-CHAPTER_BADGE_MAX_X = 0.015  # 当前章的「9.0」角标贴着左边（x≈13/2560）；其他章前面的「C-11.0」小字在 x≈69
+# 当前章的「9.0」角标贴着左边：2560x1440 下 x≈13，1280x768 窗口下「/15.0」x≈35（2.7%，实录 2026-10-21 15.0 章：
+# 旧阈值 1.5% 认不出角标，退回「最上面那章」当当前章，列表顶上是 14.0，结果把 15.0 自己当成了下一章）。
+# 其他章前面的「C-11.0」小字在 x≈69/2560，靠「C」开头排除
+CHAPTER_BADGE_MAX_X = 0.035
 chapter_badge_re = re.compile(r"\d+\s*\.\s*\d\s*$")
 chapter_title_re = re.compile(r"[\u4e00-\u9fff]{2,}")
 chapter_noise_re = re.compile(r"^C\s*-|猎人评定|同调演练|剧情战役|往期活动|模拟作战|补给作战")
@@ -129,6 +132,8 @@ def current_and_next_chapter(boxes, width, height):
         and not (b.name or "").strip().startswith("C")
     ]
     if badges:
+        # 当前章角标前面带「/」，优先认它
+        badges.sort(key=lambda b: not (b.name or "").strip().startswith(("/", "／")))
         by = badges[0].y + badges[0].height / 2
         current = min(titles, key=lambda t: abs(t.y + t.height / 2 - by))
     else:
