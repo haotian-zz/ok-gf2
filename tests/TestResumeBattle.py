@@ -54,14 +54,28 @@ def make_task(screens):
 
 
 class ResumeBattleTest(unittest.TestCase):
-    def test_result_page_is_finished_by_auto_battle(self):
-        task = make_task([[box("任务完成"), box("HA-1-2 往日名讳")]])
+    def test_result_page_is_clicked_through_to_map(self):
+        """结算页两段：人物页只有「任务完成」→ 点一下；奖励页有「确认」→ 点确认；然后回到选关。"""
+        task = make_task(
+            [
+                [box("任务完成"), box("HA-1-2 往日名讳")],
+                [box("任务完成"), box("挑战目标"), box("作战奖励"), box("确认")],
+                [box("HA-1-3"), box("普通")],
+            ]
+        )
         self.assertTrue(resume_battle(task, time_out=5))
-        task.auto_battle.assert_called_once()
+        self.assertEqual([c.args[0][0].name for c in task.click.call_args_list], ["任务完成", "确认"])
+        task.auto_battle.assert_not_called()
         task.skip_dialogs.assert_not_called()
 
     def test_story_then_result_page(self):
-        task = make_task([[box("自动跳过"), box("全部跳过")], [box("任务完成")]])
+        task = make_task([[box("自动跳过"), box("全部跳过")], [box("任务完成")], [box("HA-1-3")]])
+        self.assertTrue(resume_battle(task, time_out=5))
+        task.skip_dialogs.assert_called_once()
+        task.auto_battle.assert_not_called()
+
+    def test_continue_forward_goes_to_auto_battle(self):
+        task = make_task([[box("继续前进"), box("任务完成")]])
         self.assertTrue(resume_battle(task, time_out=5))
         task.auto_battle.assert_called_once()
 

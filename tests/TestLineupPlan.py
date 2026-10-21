@@ -330,7 +330,7 @@ class VisionTest(unittest.TestCase):
             self.assertTrue(any(abs(x - want[0]) <= 8 and abs(y - want[1]) <= 8 for x, y, _ in tags), (want, tags))
 
     def test_dark_badge_disk_found_at_2560(self):
-        """实录 2026-10-20 gf2 会话 2560x1440：蓝圈是暗青色（V 120~160），旧阈值 V>170 一个都找不到。"""
+        """实录 2026-10-20 RDP 会话 2560x1440：蓝圈是暗青色（V 120~160），旧阈值 V>170 一个都找不到。"""
         import cv2
 
         from src.core.support_select import BADGE_DX, BADGE_DY, find_badge_disk, parse_badge_text
