@@ -15,14 +15,14 @@ from types import SimpleNamespace
 source = Path(__file__).resolve().parents[1] / "src/tasks/ClearMapTask.py"
 tree = ast.parse(source.read_text(encoding="utf-8"))
 cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ClearMapTask")
-wanted = ("clear_chapter", "chapter_pass", "ensure_map", "go_to_chapter_start", "scroll_map")
+wanted = ("finish_chapter", "clear_chapter", "chapter_pass", "ensure_map", "go_to_chapter_start", "scroll_map")
 methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
 funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ("canonical_name", "revealed_new")]
 consts = [
     n
     for n in tree.body
     if isinstance(n, ast.Assign)
-    and any(isinstance(t, ast.Name) and t.id in ("CHAPTER_MAX_PASSES", "STAGE_MAX_ATTEMPTS", "ENSURE_MAP_TRIES", "PASS_MAX_STEPS", "STATUS_TEXT", "MAP_DRAG_Y") for t in n.targets)
+    and any(isinstance(t, ast.Name) and t.id in ("CHAPTER_MAX_PASSES", "STAGE_MAX_ATTEMPTS", "ENSURE_MAP_TRIES", "PASS_MAX_STEPS", "STATUS_TEXT", "MAP_DRAG_Y", "CHAPTER_VERIFY_ROUNDS") for t in n.targets)
 ]
 ns = {"re": re, "Counter": Counter, "map_re": re.compile("x"), "chapter_select_re": re.compile("^章节进度$")}
 ns["has_clear_badge"] = lambda frame, card, w, h: frame.badge(card)
@@ -46,6 +46,7 @@ class FakeChapter:
         self.blank = 0
         self.drag_ok = True  # 真实鼠标能拖地图（PostMessage 模式拖不动）
         self.flicker = False  # 屏幕边上的卡片 OCR 时有时无
+        self.blind_scrolls = 0  # 接下来几次往右挪视野「没看到新卡片」（模拟某一遍提前以为扫到头了）
         self._tick = 0
         self.drags = 0
         self.config = {}
@@ -87,12 +88,19 @@ class FakeChapter:
 
     # ---- 操作
     def click(self, target, after_sleep=0):
+        if getattr(self, "_blind", False):
+            self._blind = False
+            return
         if isinstance(target, SimpleNamespace) and target.name in self.stages:
             # 点卡片：游戏把它滚到屏幕左边约 1/4 处（左边还能看到 500 左右）
             self.view_left = max(0, self.stages[target.name]["x"] - 500)
             self._pending = target.name
 
     def swipe_relative(self, x1, y1, x2, y2, duration=0.5):
+        if x1 > x2 and self.blind_scrolls:
+            self.blind_scrolls -= 1
+            self._blind = True
+            return
         if self.drag_ok:
             self.drags += 1
             right = max(st["x"] for st in self.stages.values())
@@ -121,6 +129,10 @@ class FakeChapter:
 
     def reenter_from_chapter_select(self):
         return False
+
+    def chapter_percent(self):
+        battles = [st for st in self.stages.values() if not st.get("story")]
+        return 100 * sum(st["done"] for st in battles) // len(battles)
 
     def back(self, after_sleep=0):
         pass
@@ -226,6 +238,21 @@ class ClearChapterTest(unittest.TestCase):
         game.inspect_card = lambda card, name: opened.append(name) or ("cleared", None)
         played, locked = game.clear_chapter()
         self.assertEqual((played, locked, opened), (0, [], []))
+
+    def test_progress_check_catches_a_pass_that_ended_early(self):
+        """实录 2026-10-20 12.5 章：某一遍中途视野没挪到右边就以为扫完了，又恰好那一遍没推关，漏了好几关。"""
+        game = FakeChapter(chapter_11())
+        game.blind_scrolls = 5  # 往右挪有五次「看不到新卡片」，分散在前后几遍里
+        played, locked = game.finish_chapter()
+        self.assertTrue(all(st["done"] for st in game.stages.values()), [n for n, s in game.stages.items() if not s["done"]])
+        self.assertEqual(game.chapter_percent(), 100)
+
+    def test_progress_short_but_nothing_left_moves_on(self):
+        game = FakeChapter({"1-1": {"x": 100, "done": True}, "1-2": {"x": 500, "done": False, "needs": ["永远"]}, "永远": {"x": 900, "done": False, "needs": ["永远"]}})
+        played, locked = game.finish_chapter()
+        self.assertEqual(played, 0)
+        self.assertTrue(any("没有能推的关了" in m for m in game.log), game.log)
+        self.assertEqual(game.played, [])
 
     def test_without_drag_falls_back_to_clicks(self):
         game = FakeChapter(chapter_11())

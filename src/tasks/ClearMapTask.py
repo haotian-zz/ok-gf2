@@ -28,6 +28,7 @@ chapter_title_re = re.compile(r"[\u4e00-\u9fff]{2,}")
 chapter_noise_re = re.compile(r"^C\s*-|猎人评定|同调演练|剧情战役|往期活动|模拟作战|补给作战")
 chapter_select_words = ["章节进度"]
 
+CHAPTER_VERIFY_ROUNDS = 4  # 推完一章后按「章节进度」核对，最多回去再扫几轮
 CHAPTER_MAX_PASSES = 6  # 一章最多从头扫几遍（每遍推过关才会再扫，正常两遍就停）
 STAGE_MAX_ATTEMPTS = 2  # 同一关一次推图里最多打几次
 ENSURE_MAP_TRIES = 4  # 看不到关卡时最多恢复几次
@@ -74,6 +75,23 @@ def current_and_next_chapter(boxes, width, height):
 
 
 chapter_progress_re = re.compile(r"^\s*\d{1,3}\s*%\s*$|^\s*\d{1,3}\s*/\s*\d{1,3}\s*$")
+
+
+def parse_chapter_percent(boxes, width):
+    """
+    章节选择页右侧「章节进度 57%」里的百分比（游戏按本章勋章算，全拿到才是 100%）；读不到返回 None。
+    OCR 常把标签和数字粘在一起、竖线读成 1（实录「章节进度1100%」），所以只取紧挨着 % 的最多三位数。
+    """
+    for b in boxes:
+        if b.x < 0.6 * width:
+            continue
+        if m := re.search(r"(\d{1,3})\s*%", (b.name or "").replace("进度", " ")):
+            value = int(m.group(1))
+            if value > 100:
+                value = int(str(value)[-3:]) if str(value)[-3:] == "100" else int(str(value)[-2:])
+            if 0 <= value <= 100:
+                return value
+    return None
 
 
 def chapter_display_name(text):
@@ -287,7 +305,7 @@ class ClearMapTask(BaseGfTask):
 
         total = 0
         for _ in range(30):
-            count, locked = self.clear_chapter()
+            count, locked = self.finish_chapter()
             total += count
             if locked and not self.config.get("推完继续下一章", True):
                 err = ChapterLocked(f"剩余关卡都未解锁({locked}), 请检查前置关卡后再启动")
@@ -312,6 +330,16 @@ class ClearMapTask(BaseGfTask):
                 return True
             self.back(after_sleep=2)
         return bool(self.ocr(match=chapter_select_words, box="bottom_right"))
+
+    def chapter_percent(self):
+        """回章节选择页读当前章节的完成度百分比（不进下一章，停在章节选择页）。"""
+        self.close_map_panel()
+        if not self.open_chapter_select():
+            return None
+        self.sleep(1)
+        boxes = self.ocr(log=True)
+        self.debug_shot("chapter_progress", boxes)
+        return parse_chapter_percent(boxes, self.width)
 
     def reenter_from_chapter_select(self):
         """
@@ -444,6 +472,40 @@ class ClearMapTask(BaseGfTask):
             self.log_info(f"本章勋章 {medals[0]}/{medals[1]}，全部拿到", notify=False)
         return total, sorted(locked)
 
+    def finish_chapter(self):
+        """
+        推完当前章节，并用游戏自己的「章节进度」核对，不只信自己扫没扫全：
+        扫到不动点后回章节选择页看百分比，不到 100% 就进回去再推一轮；某一轮一关都没推还是不到 100%，
+        说明剩下的是没拿满的挑战目标或真没解锁的关，通知出来再继续（实录 2026-10-20 第 11、12.5 章：
+        某一遍中途被弹回章节选择页、视野没回到右边就以为扫完了，漏了好几关）。
+        :return: (推进的关数, 未解锁的关卡名)
+        """
+        total = 0
+        locked = []
+        idle = 0  # 连续几轮一关都没推
+        for check in range(CHAPTER_VERIFY_ROUNDS):
+            count, locked = self.clear_chapter()
+            total += count
+            percent = self.chapter_percent()
+            if percent is None:
+                self.log_info("章节选择页没读到「章节进度」，按扫描结果算本章推完", notify=True)
+                break
+            if percent >= 100:
+                self.log_info(f"章节进度 100%，本章推完（本次推进 {total} 关）", notify=True)
+                break
+            idle = idle + 1 if count == 0 else 0
+            if idle >= 2:
+                self.log_info(
+                    f"章节进度 {percent}%：连续两轮整章扫都没有能推的关了（未解锁 {locked or '无'}），"
+                    f"剩下的多半是没拿满的挑战目标，继续下一章",
+                    notify=True,
+                )
+                break
+            self.log_info(f"章节进度只有 {percent}%，进回本章再扫一轮", notify=True)
+            if not self.reenter_from_chapter_select():
+                self.ensure_map()
+        return total, locked
+
     def chapter_pass(self, attempts):
         """从章节起点往右扫一遍，推掉所有能推的关。返回 (这一遍推的关数, 这一遍看到的未解锁关卡名)。"""
         self.info_set("current_task", "从左到右推图")
@@ -462,8 +524,11 @@ class ClearMapTask(BaseGfTask):
                 else:
                     todo.append((card, group))
             if not todo:
-                # 屏幕上的都看过了：视野往右挪，挪不动就是这一遍扫完了
-                if self.scroll_map(1, ordered) is None:
+                # 屏幕上的都看过了：视野往右挪；连续两次挪不动才算这一遍扫到头（偶尔一次拖动/点击没生效）
+                moved = self.scroll_map(1, ordered)
+                if moved is None:
+                    moved = self.scroll_map(1, self.ensure_map())
+                if moved is None:
                     return played, locked
                 continue
             card, group = todo[0]
