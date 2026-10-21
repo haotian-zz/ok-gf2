@@ -47,6 +47,8 @@ class FakeChapter:
         self.drag_ok = True  # 真实鼠标能拖地图（PostMessage 模式拖不动）
         self.flicker = False  # 屏幕边上的卡片 OCR 时有时无
         self.blind_scrolls = 0  # 接下来几次往右挪视野「没看到新卡片」（模拟某一遍提前以为扫到头了）
+        self.misread = {}  # 某关的名字 OCR 每次读成不同的样子（轮流取）
+        self.aliases = {}
         self._tick = 0
         self.drags = 0
         self.config = {}
@@ -69,6 +71,17 @@ class FakeChapter:
         if self.flicker:
             self._tick += 1
             vis = [v for v in vis if not (v[0].x > 1700 and self._tick % 2)]
+        if self.misread:
+            self._tick += 1
+            out = []
+            for card, group in vis:
+                names = self.misread.get(card.name)
+                if names:
+                    alias = names[self._tick % len(names)]
+                    self.aliases[alias] = card.name
+                    group = {alias}
+                out.append((card, group))
+            vis = out
         return sorted(vis, key=lambda v: v[0].x)
 
     def badge(self, card):
@@ -79,6 +92,7 @@ class FakeChapter:
         return st["done"] and card.name not in self.broken_badge
 
     def status(self, name):
+        name = self.aliases.get(name, name)
         st = self.stages[name]
         if st["done"]:
             return "cleared"
@@ -112,7 +126,7 @@ class FakeChapter:
         return st, ([SimpleNamespace(name="挑战")] if st in ("challenge", "watch") else None)
 
     def _finish(self, **kw):
-        name = self._pending
+        name = self.aliases.get(self._pending, self._pending)
         self.stages[name]["done"] = True
         self.played.append(name)
         self.view_left = self.camera_after.get(name, self.view_left)
@@ -272,6 +286,27 @@ class ClearChapterTest(unittest.TestCase):
         self.assertLessEqual(len(clicks), 2, clicks)
         played, _ = game.clear_chapter()
         self.assertEqual(played, 0)
+
+    def test_misread_edge_card_at_chapter_end_does_not_loop(self):
+        """实录 2026-10-21 15.0 章：最右的 VS-1-11 读成好几种名字，地图没动也当成冒出新卡片，在末尾拖了 7 分钟。"""
+        game = FakeChapter({f"VS-1-{i}": {"x": 300 * i, "done": True} for i in range(1, 12)})
+        game.misread = {"VS-1-11": ["VS-1-11", ")VS-1-11", "1-0", "-1-10", "）VS-1-11"]}
+        played, _ = game.clear_chapter()
+        self.assertEqual(played, 0)
+        self.assertLess(game.drags, 25, game.drags)
+
+    def test_chain_unlocking_leftwards_finishes_in_one_pass(self):
+        """实录 2026-10-21 15.0 章：剧情关一关开一关，下一关就在旁边；推掉一关后马上重看本屏的未解锁卡，不用每关都等下一遍。"""
+        st = {"VS-1-1": {"x": 100, "done": True}}
+        prev = "VS-1-1"
+        for i in range(2, 8):
+            name = f"VS-1-{i}"
+            st[name] = {"x": 900 - 100 * i, "y": 300 + 50 * i, "done": False, "needs": [prev], "story": True}
+            prev = name
+        game = FakeChapter(st)
+        game.clear_chapter()
+        self.assertTrue(all(v["done"] for v in game.stages.values()))
+        self.assertTrue(any(m.startswith("第 1 遍扫完：推了 6 关") for m in game.log), game.log)
 
     def test_drag_is_used_when_available(self):
         game = FakeChapter({f"1-{i}": {"x": 300 * i, "done": True} for i in range(1, 30)})

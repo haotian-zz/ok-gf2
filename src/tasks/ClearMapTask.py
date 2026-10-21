@@ -154,24 +154,41 @@ def order_maps(maps, name_groups):
     return sorted(zip(maps, name_groups, strict=True), key=lambda item: item[0].x)
 
 
-def revealed_new(before, after, direction):
+def revealed_new(before, after, direction, min_shift=40, same_tol=60):
     """
     挪完视野后，要去的那一边有没有冒出之前没见过的卡片（direction=1 右边，-1 左边）。
-    只看「新卡片在不在两帧都有的卡片的那一侧」：
+    先按两帧都有的卡片量出地图挪了多少：没往要去的方向挪够 min_shift 就是到头了，不管名字。
+    新卡片 = 名字没见过、并且（扣掉挪动量后）位置上之前也没有卡片的；同一位置换了个名字只是 OCR 读花了。
     - 不比名字集合：屏幕边上半张卡的名字 OCR 时有时无；
     - 不只看位置变没变：章节起点的第一张卡在屏幕中间，点它会把视野往右带，下一次往左拖又回来，
-      看起来一直在「动」（实录 2026-10-20：回章节起点时反复点 BA-1-1）。
+      看起来一直在「动」（实录 2026-10-20：回章节起点时反复点 BA-1-1）；
+    - 实录 2026-10-21 15.0 章：最右的 VS-1-11 读成 VS-1-11 / )VS-1-11 / 1-0 / -1-10，地图其实没动，
+      每次都当成冒出了新卡片，在章节末尾拖了 7 分钟。
     """
-    seen = set()
-    for _, group in before:
-        seen |= group
-    common = [card.x for card, group in after if group & seen]
-    new = [card.x for card, group in after if not (group & seen)]
+    seen = {}
+    for card, group in before:
+        for name in group:
+            seen.setdefault(name, card)
+    shifts = []
+    for card, group in after:
+        common = group & seen.keys()
+        if common:
+            shifts.append(card.x - seen[next(iter(common))].x)
+    shift = sorted(shifts)[len(shifts) // 2] if shifts else 0
+    if shifts and shift * direction > -min_shift:
+        return False
+    new = [
+        card.x
+        for card, group in after
+        if not (group & seen.keys())
+        and not any(abs(card.x - shift - old.x) < same_tol and abs(card.y - old.y) < same_tol for old, _ in before)
+    ]
     if not new:
         return False
-    if not common:
+    common_x = [card.x for card, group in after if group & seen.keys()]
+    if not common_x:
         return True
-    return min(new) < min(common) if direction < 0 else max(new) > max(common)
+    return min(new) < min(common_x) if direction < 0 else max(new) > max(common_x)
 
 
 class ClearMapTask(BaseGfTask):
@@ -512,6 +529,8 @@ class ClearMapTask(BaseGfTask):
         self.go_to_chapter_start()
         handled = set()  # 这一遍已经看过的关卡名（含 OCR 的别名）
         locked = set()
+        locked_groups = []  # 这一遍判成未解锁的卡；推掉一关后放回去重看（本章是一关开一关时不用等下一遍）
+        done = set()
         unknown_tries = Counter()
         played = 0
         for _ in range(PASS_MAX_STEPS):
@@ -529,7 +548,7 @@ class ClearMapTask(BaseGfTask):
                 if moved is None:
                     moved = self.scroll_map(1, self.ensure_map())
                 if moved is None:
-                    return played, locked
+                    return played, locked - done
                 continue
             card, group = todo[0]
             name = canonical_name(group) or "unknown"
@@ -545,6 +564,7 @@ class ClearMapTask(BaseGfTask):
             if status not in ("challenge", "watch"):
                 if status == "locked":
                     locked.add(name)
+                    locked_groups.append(group)
                 self.log_info(f"{name} {STATUS_TEXT.get(status, status)}", notify=False)
                 handled.update(group)
                 self.close_map_panel()
@@ -562,6 +582,10 @@ class ClearMapTask(BaseGfTask):
                 self.skip_dialogs(end_match=[map_re, chapter_select_re], raise_if_not_found=False)
             played += 1
             handled.update(group)
+            done.update(group)
+            for g in locked_groups:
+                handled -= g - done
+            locked_groups.clear()
             self.close_map_panel()
         raise Exception(f"一遍扫描超过 {PASS_MAX_STEPS} 步还没扫完, 请检查游戏画面")
 
