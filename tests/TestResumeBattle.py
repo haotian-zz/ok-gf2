@@ -23,6 +23,7 @@ ns = {
     "pop_ups": ["点击空白处关闭"],
     "BattleLost": type("BattleLost", (Exception,), {}),
     "campaign_re": re.compile(r"战役推进"),
+    "failure_page_re": re.compile(r"重新挑战|战斗重演"),
 }
 exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), "exec"), ns)
 resume_battle = ns["resume_battle"]
@@ -91,7 +92,7 @@ class ResumeBattleTest(unittest.TestCase):
         self.assertEqual(task.click.call_args.args[0][0].name, "确认")
 
     def test_normal_failure_page_still_raises(self):
-        task = make_task([[box("任务失败"), box("确认")]])
+        task = make_task([[box("任务失败"), box("重新挑战"), box("确认")]])
         with self.assertRaises(ns["BattleLost"]):
             resume_battle(task)
 

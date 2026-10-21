@@ -5,7 +5,15 @@ from collections import Counter
 import cv2
 from ok import Logger
 
-from src.core.BaseGfTask import BaseGfTask, BattleLost, chapter_select_re, map_re, nav_tabs_re, pop_ups
+from src.core.BaseGfTask import (
+    BaseGfTask,
+    BattleLost,
+    chapter_select_re,
+    failure_page_re,
+    map_re,
+    nav_tabs_re,
+    pop_ups,
+)
 from src.core.stage_card import MEDAL_BOX, has_clear_badge, medal_re, parse_medals
 from src.image.hsv_config import HSVRange as hR
 
@@ -665,7 +673,7 @@ class ClearMapTask(BaseGfTask):
                 self.reenter_from_chapter_select()
                 self.close_map_panel()
                 return True
-            if self.find_boxes(boxes, match="任务失败"):
+            if self.find_boxes(boxes, match="任务失败") and self.find_boxes(boxes, match=failure_page_re):
                 self.debug_shot("resume_failed", boxes)
                 # 英雄难度打输是跳过这关接着推：失败结算页「重新挑战 / 战斗重演 / 确认」点确认回地图
                 # （实录 2026-10-21 12.5 章：只点了「任务失败」标题，停在这页，回地图时又当成打输停了）
