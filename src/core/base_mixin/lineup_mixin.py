@@ -199,16 +199,10 @@ class LineupMixin:
         return card
 
     def _withdraw_own_card(self, u, why):
-        """优先从面板撤：点打勾的卡片会在地图上选中它，按钮变「撤回人形」；不行再去地图上找。"""
-        card = self._locate_own_card(u) or u.ref
-        x, y = card["center"]
-        self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
-        self.next_frame()
-        kind, button = self._deploy_button()
-        if kind == "withdraw" and self._name_like(self._selected_role_name(), u.name):
-            return self._press_withdraw(button, u.name, why)
-        self.log_info(f"点面板上的 {u.name} 没出现「撤回人形」（{kind}），去地图上找", notify=False)
-        self._clear_selection()
+        """
+        在地图上找到这个单位再撤。面板上点在场的卡片不行：实录 2026-10-20 两次都只是选中卡片
+        （按钮是「请点击地格」），不会出现「撤回人形」。地图上的候选格子按编号标签 + 地格找，逐个点开核对名字。
+        """
         for tile, desc in self._unit_tiles():
             if self._withdraw_at(tile, u.name, why, quiet=True):
                 return True

@@ -254,6 +254,17 @@ class VisionTest(unittest.TestCase):
         self.assertGreater(y, 380)
         self.assertIsNone(freed_tile(before, before.copy(), w, h))
 
+    def test_unit_tags_found_at_2560(self):
+        """实录 2026-10-20：2560x1440 下旧模板（边框写死 1~2 像素、中间画个「1」）四个编号标签一个都没认出来。"""
+        import cv2
+
+        from src.core.support_select import find_unit_tags
+
+        frame = cv2.imread(str(Path(__file__).resolve().parent / "fixtures" / "deploy_unit_tags_2560x1440.jpg"))
+        tags = find_unit_tags(frame, 2560, 1440)
+        for want in [(820, 735), (671, 670), (1269, 755), (1100, 684)]:  # 标签 1、4、3、2
+            self.assertTrue(any(abs(x - want[0]) <= 8 and abs(y - want[1]) <= 8 for x, y, _ in tags), (want, tags))
+
     def test_dark_badge_disk_found_at_2560(self):
         """实录 2026-10-20 gf2 会话 2560x1440：蓝圈是暗青色（V 120~160），旧阈值 V>170 一个都找不到。"""
         import cv2

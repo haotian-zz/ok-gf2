@@ -32,6 +32,7 @@ CHAPTER_MAX_PASSES = 6  # 一章最多从头扫几遍（每遍推过关才会再
 STAGE_MAX_ATTEMPTS = 2  # 同一关一次推图里最多打几次
 ENSURE_MAP_TRIES = 4  # 看不到关卡时最多恢复几次
 PASS_MAX_STEPS = 300  # 一遍扫描最多处理多少步（防止死循环）
+MAP_DRAG_Y = 0.2  # 拖地图时按住的高度：卡片都在 0.3~0.75，这一带是空白背景，不会点到卡片
 STATUS_TEXT = {"cleared": "已通关（面板没有首通奖励）, 跳过", "locked": "未解锁, 先推其他关卡", "nopanel": "没读到关卡面板, 跳过",
                "unknown": "面板反复读不到按钮, 跳过", "skip": "跳过"}
 
@@ -431,7 +432,6 @@ class ClearMapTask(BaseGfTask):
         locked = set()
         unknown_tries = Counter()
         played = 0
-        last_scroll = None
         for _ in range(PASS_MAX_STEPS):
             ordered = self.ensure_map()
             pending = [(card, group) for card, group in ordered if not (group & handled)]
@@ -442,16 +442,10 @@ class ClearMapTask(BaseGfTask):
                 else:
                     todo.append((card, group))
             if not todo:
-                # 屏幕上的都看过了：点最右边的卡片把视野往右挪（点过后游戏把它滚到左边）
-                rightmost, group = ordered[-1]
-                name = canonical_name(group)
-                if name != last_scroll and rightmost.x > self.width * 0.55:
-                    last_scroll = name
-                    self.log_info(f"向右查看更多关卡 (点击 {name})", notify=False)
-                    self.click(rightmost, after_sleep=1.5)
-                    self.close_map_panel()
-                    continue
-                return played, locked
+                # 屏幕上的都看过了：视野往右挪，挪不动就是这一遍扫完了
+                if self.scroll_map(1, ordered) is None:
+                    return played, locked
+                continue
             card, group = todo[0]
             name = canonical_name(group) or "unknown"
             status, action = self.inspect_card(card, name)
@@ -483,7 +477,6 @@ class ClearMapTask(BaseGfTask):
                 self.skip_dialogs(end_match=[map_re, chapter_select_re], raise_if_not_found=False)
             played += 1
             handled.update(group)
-            last_scroll = None
             self.close_map_panel()
         raise Exception(f"一遍扫描超过 {PASS_MAX_STEPS} 步还没扫完, 请检查游戏画面")
 
@@ -515,23 +508,38 @@ class ClearMapTask(BaseGfTask):
         boxes = self.ocr(*MEDAL_BOX, match=medal_re) or []
         return parse_medals([b.name for b in boxes])
 
-    def go_to_chapter_start(self):
+    def scroll_map(self, direction, ordered):
         """
-        点屏幕最左边的卡片把视野往左挪，直到最左的卡片不再变化（到达章节起点）。
-        点卡片会弹出面板，游戏会把它滚到屏幕左中位置；面板随手关掉，状态留给扫描时看对勾判断。
+        把视野往右（direction=1）或往左（-1）挪，返回挪完后的扫描结果；没挪动（已到头）返回 None。
+        先用真实鼠标拖地图（一次能挪三四张卡）；拖了没变化（PostMessage 模式拖不动，或已到头）再退回老办法：
+        点最边上的卡片，游戏会把它滚到屏幕左边。
         """
-        self.info_set("current_task", "回到章节起点")
-        prev = None
-        for _ in range(30):
-            ordered = self.ensure_map()
-            leftmost, group = ordered[0]
-            name = canonical_name(group)
-            if name == prev or leftmost.x >= self.width * 0.45:
-                return
-            prev = name
-            self.click(leftmost, after_sleep=1.5)
-            self.close_map_panel()
+        before = {canonical_name(g) for _, g in ordered}
+        y = MAP_DRAG_Y
+        start, end = (0.75, 0.25) if direction > 0 else (0.25, 0.75)
+        self.swipe_relative(start, y, end, y, duration=0.6)
+        self.sleep(1)
+        after = self.ensure_map()
+        if {canonical_name(g) for _, g in after} != before:
+            return after
+        edge, group = ordered[-1] if direction > 0 else ordered[0]
+        if direction > 0 and edge.x <= self.width * 0.55:
+            return None  # 最右的卡片已经在屏幕左半边，右边没有了
+        if direction < 0 and edge.x >= self.width * 0.45:
+            return None  # 最左的卡片已经在屏幕中间，左边没有了
+        self.click(edge, after_sleep=1.5)
+        self.close_map_panel()
+        after = self.ensure_map()
+        return after if {canonical_name(g) for _, g in after} != before else None
 
+    def go_to_chapter_start(self):
+        """一直往左挪视野，直到挪不动（到达章节起点）。"""
+        self.info_set("current_task", "回到章节起点")
+        ordered = self.ensure_map()
+        for _ in range(40):
+            ordered = self.scroll_map(-1, ordered)
+            if ordered is None:
+                return
 
 def merge_maps(maps, x_threshold=40, y_threshold=40):
     merged = []  # 存最终的 map 对象

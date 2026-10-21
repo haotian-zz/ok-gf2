@@ -15,14 +15,14 @@ from types import SimpleNamespace
 source = Path(__file__).resolve().parents[1] / "src/tasks/ClearMapTask.py"
 tree = ast.parse(source.read_text(encoding="utf-8"))
 cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ClearMapTask")
-wanted = ("clear_chapter", "chapter_pass", "ensure_map", "go_to_chapter_start")
+wanted = ("clear_chapter", "chapter_pass", "ensure_map", "go_to_chapter_start", "scroll_map")
 methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
 funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "canonical_name"]
 consts = [
     n
     for n in tree.body
     if isinstance(n, ast.Assign)
-    and any(isinstance(t, ast.Name) and t.id in ("CHAPTER_MAX_PASSES", "STAGE_MAX_ATTEMPTS", "ENSURE_MAP_TRIES", "PASS_MAX_STEPS", "STATUS_TEXT") for t in n.targets)
+    and any(isinstance(t, ast.Name) and t.id in ("CHAPTER_MAX_PASSES", "STAGE_MAX_ATTEMPTS", "ENSURE_MAP_TRIES", "PASS_MAX_STEPS", "STATUS_TEXT", "MAP_DRAG_Y") for t in n.targets)
 ]
 ns = {"re": re, "Counter": Counter, "map_re": re.compile("x"), "chapter_select_re": re.compile("^章节进度$")}
 ns["has_clear_badge"] = lambda frame, card, w, h: frame.badge(card)
@@ -44,6 +44,8 @@ class FakeChapter:
         self.badge_misses = Counter()  # 某关的对勾前几次漏看
         self.broken_badge = set()  # 打完也永远看不出对勾的关
         self.blank = 0
+        self.drag_ok = True  # 真实鼠标能拖地图（PostMessage 模式拖不动）
+        self.drags = 0
         self.config = {}
         self.frame = self
         self.log = []
@@ -84,6 +86,12 @@ class FakeChapter:
             # 点卡片：游戏把它滚到屏幕左边约 1/4 处（左边还能看到 500 左右）
             self.view_left = max(0, self.stages[target.name]["x"] - 500)
             self._pending = target.name
+
+    def swipe_relative(self, x1, y1, x2, y2, duration=0.5):
+        if self.drag_ok:
+            self.drags += 1
+            right = max(st["x"] for st in self.stages.values())
+            self.view_left = min(max(0, self.view_left + int((x1 - x2) * 2000)), max(0, right - 1000))
 
     def inspect_card(self, card, name):
         self.click(card)
@@ -213,6 +221,20 @@ class ClearChapterTest(unittest.TestCase):
         game.inspect_card = lambda card, name: opened.append(name) or ("cleared", None)
         played, locked = game.clear_chapter()
         self.assertEqual((played, locked, opened), (0, [], []))
+
+    def test_without_drag_falls_back_to_clicks(self):
+        game = FakeChapter(chapter_11())
+        game.drag_ok = False
+        game.blank_after = {"LS-1-7": 1}
+        game.clear_chapter()
+        self.assertTrue(all(st["done"] for st in game.stages.values()))
+
+    def test_drag_is_used_when_available(self):
+        game = FakeChapter({f"1-{i}": {"x": 300 * i, "done": True} for i in range(1, 30)})
+        game.view_left = 6000
+        game.go_to_chapter_start()
+        self.assertEqual(game.view_left, 0)
+        self.assertGreater(game.drags, 0)
 
 
 class StageCardTest(unittest.TestCase):

@@ -490,40 +490,61 @@ UNIT_TAG_SCORE = 0.6
 
 
 def find_unit_tags(frame, width, height, max_n=8):
-    """返回 [(x, y, score), ...]，按匹配度从高到低。OCR 认不准这种小数字，用「深色方块 + 白边」的模板找。"""
+    """
+    我方单位头顶的编号标签（深色方块 + 亮边 + 白色数字 1~5），返回 [(x, y, score), ...]，按匹配度从高到低。
+    - 模板按画面高度缩放，中间数字区域用 mask 排除，不管是几号都能匹配；
+    - 再核对结构：内部大部分是深色、边框明显比内部亮、中间有白色（三通道都亮）的数字。
+      敌人的等级牌数字是黄色的，靠这一条排除。
+    实录 2026-10-20 2560x1440：旧模板边框写死 1~2 像素、中间画了个「1」，四个标签一个都没认出来，
+    撤人时找不到自己的单位，只点到了敌人。
+    """
     if frame is None:
         return []
     s = height / 768
     x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
-    gray = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
-    best = None
-    for n0, b in ((17, 1), (19, 2), (21, 2)):
+    region = frame[y0:y1, x0:x1]
+    g8 = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+    gray = g8.astype(np.float32)
+    best = sizes = None
+    for n0 in (17, 19, 21):
         n = int(round(n0 * s)) | 1
         if gray.shape[0] <= n or gray.shape[1] <= n:
             continue
-        tpl = np.full((n, n), 235, np.uint8)
-        tpl[b : n - b, b : n - b] = 60
-        c = n // 2
-        tpl[c - 4 : c + 4, c - 1 : c + 2] = 220  # 中间一竖代表数字
-        res = cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED)
+        b = max(2, int(round(n * 0.14)))
+        tpl = np.full((n, n), 200, np.float32)
+        tpl[b : n - b, b : n - b] = 40
+        mask = np.ones((n, n), np.float32)
+        c, q = n // 2, max(2, int(round(n * 0.22)))
+        mask[c - q : c + q + 1, c - q : c + q + 1] = 0  # 数字区域不参与比较
+        res = np.nan_to_num(cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED, mask=mask), nan=0, posinf=0, neginf=0)
         res = cv2.copyMakeBorder(
             res, n // 2, gray.shape[0] - res.shape[0] - n // 2, n // 2, gray.shape[1] - res.shape[1] - n // 2, cv2.BORDER_CONSTANT, value=0
         )
-        best = res if best is None else np.maximum(best, res)
+        if best is None:
+            best, sizes = res, np.full(res.shape, n, np.int32)
+        else:
+            better = res > best
+            best, sizes = np.where(better, res, best), np.where(better, n, sizes)
     if best is None:
         return []
     out = []
-    r = int(9 * s)
-    for _ in range(max_n):
+    sup = int(round(14 * s))
+    for _ in range(max_n + 6):
         _, mx, _, (x, y) = cv2.minMaxLoc(best)
-        if mx < UNIT_TAG_SCORE:
+        if mx < UNIT_TAG_SCORE or len(out) >= max_n:
             break
-        cv2.rectangle(best, (x - 14, y - 14), (x + 14, y + 14), 0, -1)
-        if y - r < 0 or x - r < 0 or y + r >= gray.shape[0] or x + r >= gray.shape[1]:
+        n = int(sizes[y, x])
+        best[max(0, y - sup) : y + sup, max(0, x - sup) : x + sup] = 0
+        h, b = n // 2, max(2, int(round(n * 0.14)))
+        if y - h < 0 or x - h < 0 or y + h >= g8.shape[0] or x + h >= g8.shape[1]:
             continue
-        inner = gray[y - 5 : y + 6, x - 5 : x + 6]
-        ring = np.concatenate([gray[y - r, x - r : x + r + 1], gray[y + r, x - r : x + r + 1], gray[y - r : y + r + 1, x - r], gray[y - r : y + r + 1, x + r]])
-        if np.median(inner) < 120 and np.percentile(ring, 60) > 140:
+        sq = g8[y - h : y + h + 1, x - h : x + h + 1]
+        inner = sq[b + 1 : -b - 1, b + 1 : -b - 1]
+        inner_bgr = region[y - h + b + 1 : y + h - b, x - h + b + 1 : x + h - b]
+        ring = np.concatenate([sq[:b].ravel(), sq[-b:].ravel(), sq[:, :b].ravel(), sq[:, -b:].ravel()])
+        dark = float((inner < 80).mean())
+        white = float((inner_bgr.min(axis=2) > 170).mean())
+        if dark > 0.55 and 0.02 < white < 0.4 and np.median(ring) > np.median(inner) + 60:
             out.append((x0 + x, y0 + y, round(float(mx), 2)))
     return out
 
