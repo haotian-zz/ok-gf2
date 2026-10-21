@@ -142,11 +142,16 @@ class FakeScreen(LineupMixin):
         return False
 
     # 被替换的三个动作
-    def _observe_lineup(self, need_map=True):
+    map_blind = False  # 点地图认不出助战（实录 LA-1-3）
+
+    def _observe_lineup(self, need_map=True, want=None):
         n = None if self._take_fail("count", None) else len(self.on_map)
         own_on = {name for name, s in self.on_map if not s}
         units = [Unit(name, p, deployed=name in own_on) for name, p in self.own_cards.items()]
         supports = [Unit(name, 0, deployed=True, support=True) for name, s in self.on_map if s] if need_map else []
+        known = self._borrowed_support or (want.name if want is not None and want.deployed else None)
+        if self.map_blind:
+            supports = [Unit(known, 0, deployed=True, support=True)] if known and n is not None and n - len(own_on) == 1 else []
         return LineupState(None if n is None else self.cap, n, units, supports)
 
     def _withdraw(self, step):
@@ -202,6 +207,14 @@ class ReconcileTest(unittest.TestCase):
         s = FakeScreen(4, OWN, [("春田", False)], fail=[("count", None)])
         self.assertTrue(s.reconcile_lineup(None))
         self.assertEqual(len(s.on_map), 4)
+
+    def test_support_kept_by_game_but_map_scan_blind(self):
+        """好友助战列表里要借的卡已打勾：就算点地图没认出来，也不白撤人。"""
+        s = FakeScreen(4, OWN, [("春田", False), ("贝丝蒂", False), ("罗蕾莱", False), ("威玛西娜", True)])
+        s.map_blind = True
+        want = Unit("威玛西娜", 24871, deployed=True, support=True)
+        self.assertTrue(s.reconcile_lineup(want))
+        self.assertCountEqual(s.on_map, [("春田", False), ("贝丝蒂", False), ("罗蕾莱", False), ("威玛西娜", True)])
 
     def test_keep_existing_support(self):
         s = FakeScreen(4, OWN, [("春田", False), ("贝丝蒂", False), ("琼玖", False), ("威玛西娜", True)])

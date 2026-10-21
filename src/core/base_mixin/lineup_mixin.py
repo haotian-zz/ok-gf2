@@ -70,7 +70,7 @@ class LineupMixin:
         failed = Counter()  # 动作 -> 失手次数
         state = None
         for rnd in range(max_rounds):
-            state = self._observe_lineup(need_map=want is not None)
+            state = self._observe_lineup(need_map=want is not None, want=want)
             if want is not None and any(self._name_like(u.name, want.name) for u in state.supports_on_map):
                 self._borrowed_support = want.name
             # 我方卡片点了一次没上去就换下一张（多半是这张卡本身的问题）；撤人/上助战可以再试一次
@@ -118,15 +118,17 @@ class LineupMixin:
         return step.action, step.unit.name, step.unit.power, step.unit.support
 
     # ------------------------------------------------------------------ 观察
-    def _observe_lineup(self, need_map=True):
+    def _observe_lineup(self, need_map=True, want=None):
         """读顶部 n/m、我的人形面板（打勾=在场），需要时再点地图上的单位找出场上的助战。"""
         count = self._deploy_count()
         own = self._observe_own()
         supports = []
         own_on = sum(1 for u in own if u.deployed)
-        if need_map and count is not None and count[0] - own_on == 1 and self._borrowed_support:
-            # 多出来的一个就是这次刚放上去的助战，不用再挨个点地图
-            supports = [Unit(self._borrowed_support, 0, deployed=True, support=True)]
+        known = self._borrowed_support or (want.name if want is not None and want.deployed else None)
+        if need_map and count is not None and count[0] - own_on == 1 and known:
+            # 多出来的一个就是要借的助战（这次刚放上去的，或好友助战列表里它已经打了勾），不用再挨个点地图
+            # （实录 2026-10-20 LA-1-3：游戏沿用了上一关的助战威玛西娜，点地图没认出来，白撤了一个人）
+            supports = [Unit(known, 0, deployed=True, support=True)]
         elif need_map and (count is None or count[0] > own_on):
             # 场上人数比我方打勾的多 = 有助战在场（读不到计数也看一眼）
             supports = self._supports_on_map(own)
@@ -333,5 +335,7 @@ class LineupMixin:
             self.click_relative(fx / self.width, fy / self.height, after_sleep=0.8)
             self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
 
-        self.log_info(f"选定助战 {label}", notify=True)
-        return Unit(name, card["power"], support=True, ref={"reselect": reselect, "label": label})
+        self.next_frame()
+        on = is_orange_check(self.frame, *check_point(card, self.width, self.height))
+        self.log_info(f"选定助战 {label}{'（已在场上）' if on else ''}", notify=True)
+        return Unit(name, card["power"], deployed=on, support=True, ref={"reselect": reselect, "label": label})
