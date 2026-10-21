@@ -17,7 +17,7 @@ tree = ast.parse(source.read_text(encoding="utf-8"))
 cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ClearMapTask")
 wanted = ("clear_chapter", "chapter_pass", "ensure_map", "go_to_chapter_start", "scroll_map")
 methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
-funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "canonical_name"]
+funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ("canonical_name", "revealed_new")]
 consts = [
     n
     for n in tree.body
@@ -45,6 +45,8 @@ class FakeChapter:
         self.broken_badge = set()  # 打完也永远看不出对勾的关
         self.blank = 0
         self.drag_ok = True  # 真实鼠标能拖地图（PostMessage 模式拖不动）
+        self.flicker = False  # 屏幕边上的卡片 OCR 时有时无
+        self._tick = 0
         self.drags = 0
         self.config = {}
         self.frame = self
@@ -63,6 +65,9 @@ class FakeChapter:
             for n, st in self.stages.items()
             if self.view_left <= st["x"] < self.view_left + SCREEN
         ]
+        if self.flicker:
+            self._tick += 1
+            vis = [v for v in vis if not (v[0].x > 1700 and self._tick % 2)]
         return sorted(vis, key=lambda v: v[0].x)
 
     def badge(self, card):
@@ -228,6 +233,18 @@ class ClearChapterTest(unittest.TestCase):
         game.blank_after = {"LS-1-7": 1}
         game.clear_chapter()
         self.assertTrue(all(st["done"] for st in game.stages.values()))
+
+    def test_edge_card_ocr_flicker_does_not_loop(self):
+        """实录 2026-10-20：章节起点上屏幕边上的卡片名字时有时无，按名字集合判断「挪动了」，反复点 BA-1-1。"""
+        game = FakeChapter({f"BA-1-{i}": {"x": 600 + 400 * i, "done": True} for i in range(1, 12)})
+        game.flicker = True
+        clicks = []
+        orig = game.click
+        game.click = lambda t, after_sleep=0: clicks.append(getattr(t, "name", t)) or orig(t, after_sleep)
+        game.go_to_chapter_start()
+        self.assertLessEqual(len(clicks), 2, clicks)
+        played, _ = game.clear_chapter()
+        self.assertEqual(played, 0)
 
     def test_drag_is_used_when_available(self):
         game = FakeChapter({f"1-{i}": {"x": 300 * i, "done": True} for i in range(1, 30)})

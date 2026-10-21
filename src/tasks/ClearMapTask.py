@@ -136,6 +136,26 @@ def order_maps(maps, name_groups):
     return sorted(zip(maps, name_groups, strict=True), key=lambda item: item[0].x)
 
 
+def revealed_new(before, after, direction):
+    """
+    挪完视野后，要去的那一边有没有冒出之前没见过的卡片（direction=1 右边，-1 左边）。
+    只看「新卡片在不在两帧都有的卡片的那一侧」：
+    - 不比名字集合：屏幕边上半张卡的名字 OCR 时有时无；
+    - 不只看位置变没变：章节起点的第一张卡在屏幕中间，点它会把视野往右带，下一次往左拖又回来，
+      看起来一直在「动」（实录 2026-10-20：回章节起点时反复点 BA-1-1）。
+    """
+    seen = set()
+    for _, group in before:
+        seen |= group
+    common = [card.x for card, group in after if group & seen]
+    new = [card.x for card, group in after if not (group & seen)]
+    if not new:
+        return False
+    if not common:
+        return True
+    return min(new) < min(common) if direction < 0 else max(new) > max(common)
+
+
 class ClearMapTask(BaseGfTask):
     LINEUP_TASK = True  # 每关开战前都整理阵容（切编队、补满；借助战看开关）
 
@@ -511,16 +531,16 @@ class ClearMapTask(BaseGfTask):
     def scroll_map(self, direction, ordered):
         """
         把视野往右（direction=1）或往左（-1）挪，返回挪完后的扫描结果；没挪动（已到头）返回 None。
-        先用真实鼠标拖地图（一次能挪三四张卡）；拖了没变化（PostMessage 模式拖不动，或已到头）再退回老办法：
+        先用真实鼠标拖地图（一次能挪三四张卡）；拖了没动（PostMessage 模式拖不动，或已到头）再退回老办法：
         点最边上的卡片，游戏会把它滚到屏幕左边。
+        挪到头的判断见 revealed_new。
         """
-        before = {canonical_name(g) for _, g in ordered}
         y = MAP_DRAG_Y
         start, end = (0.75, 0.25) if direction > 0 else (0.25, 0.75)
         self.swipe_relative(start, y, end, y, duration=0.6)
         self.sleep(1)
         after = self.ensure_map()
-        if {canonical_name(g) for _, g in after} != before:
+        if revealed_new(ordered, after, direction):
             return after
         edge, group = ordered[-1] if direction > 0 else ordered[0]
         if direction > 0 and edge.x <= self.width * 0.55:
@@ -530,7 +550,7 @@ class ClearMapTask(BaseGfTask):
         self.click(edge, after_sleep=1.5)
         self.close_map_panel()
         after = self.ensure_map()
-        return after if {canonical_name(g) for _, g in after} != before else None
+        return after if revealed_new(ordered, after, direction) else None
 
     def go_to_chapter_start(self):
         """一直往左挪视野，直到挪不动（到达章节起点）。"""
