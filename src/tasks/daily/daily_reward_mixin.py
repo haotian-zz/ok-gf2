@@ -58,11 +58,11 @@ class DailyRewardMixin:
             self.next_frame()
             box = self.ocr(match=[re.compile(r"^巡录$")], box=self.box.bottom)
         if not box:
-            self.log_info("主页底栏没找到「巡录」入口，跳过大月卡", notify=True)
+            self.log_info("主页底栏整帧也没找到「巡录」入口", notify=True)
             self.screenshot("xunlu_entry_missing")
-            self.info_set("巡录", "没找到入口，跳过")
+            self.info_set("巡录", "没找到入口")
             self.ensure_main()
-            return True
+            return False
         self.click_box_by_match_position(box, "巡录", after_sleep=2)
         # 预览页入口是可选的；通行证奖励页并不是每日行动页。
         if self.wait_click_ocr(

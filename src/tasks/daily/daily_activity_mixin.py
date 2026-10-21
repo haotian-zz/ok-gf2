@@ -29,10 +29,20 @@ class DailyActivityMixin:
         """逐项领取补给，区分活动缺席与页面未确认并恢复主页。"""
         uncertain = False
         try:
-            self.wait_click_ocr(
-                match=["活动"], box=self.box._activities, after_sleep=1, time_out=3, raise_if_not_found=False
-            )
-            if not self._ensure_supply_menu():
+            # 实录（tests/fixtures/activity_page_1280x768.png）：点「活动」后主页 UI 先淡出，约 5~9 秒活动页才出来，
+            # 等得太短会误报；真没打开再点一次「活动」，两次都确认不了才待核查
+            opened = False
+            for attempt in range(2):
+                self.wait_click_ocr(
+                    match=["活动"], box=self.box._activities, after_sleep=1, time_out=3, raise_if_not_found=False
+                )
+                opened = self._ensure_supply_menu()
+                if opened:
+                    break
+                if attempt == 0:
+                    self.log_info("点了「活动」还没确认活动列表打开，回主页再点一次", notify=False)
+                    self.ensure_main()
+            if not opened:
                 self.info_set("情报补给", "待核查：未确认活动列表打开")
                 self.info_set("战前补给", "待核查：未确认活动列表打开")
                 return "待核查"
@@ -48,8 +58,8 @@ class DailyActivityMixin:
         finally:
             self.ensure_main()
 
-    def _ensure_supply_menu(self):
-        """结合侧边列表与主页标识确认活动菜单打开。"""
+    def _ensure_supply_menu(self, time_out=12):
+        """结合侧边列表与主页标识确认活动菜单打开（活动页淡入要 5~9 秒）。"""
         menu_box = self.box_of_screen(0.035, 0.10, 0.23, 0.84)
 
         def opened():
@@ -62,7 +72,7 @@ class DailyActivityMixin:
             names = {re.sub(r"\s+", "", box.name) for box in menu}
             return not home and bool(names & {"情报补给", "战前补给"} or {"新手", "活动"} <= names)
 
-        if self.wait_until(opened, time_out=4, settle_time=0):
+        if self.wait_until(opened, time_out=time_out, settle_time=0):
             self.log_info("已确认活动列表打开")
             return True
         self.log_warning("未确认活动列表打开，跳过补给检查")
