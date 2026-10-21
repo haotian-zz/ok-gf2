@@ -1,0 +1,271 @@
+"""
+推图选难度（2026-10-21 用户需求）：普通 / 困难二选一，11.0 之后可以开英雄难度推。
+界面实录（1280x768）：地图右下角「英雄难度」「普通」「困难」，选中的难度按钮是实心蓝 / 红；
+英雄难度窗口底部「开启中 / 未开启」+ 拨动开关；英雄难度的关卡面板没有「特殊奖励」。
+只测流程，不依赖 ok 框架：把 ClearMapTask 里相关的函数和方法单独抠出来跑。
+"""
+
+import ast
+import re
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+import cv2
+import numpy as np
+
+source = Path(__file__).resolve().parents[1] / "src/tasks/ClearMapTask.py"
+tree = ast.parse(source.read_text(encoding="utf-8"))
+cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ClearMapTask")
+wanted = ("read_difficulty", "ensure_difficulty", "ensure_hero", "panel_status")
+methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
+funcs = [
+    n
+    for n in tree.body
+    if isinstance(n, ast.FunctionDef)
+    and n.name in ("difficulty_fill", "selected_difficulty", "chapter_number", "classify_panel")
+]
+consts = [
+    n
+    for n in tree.body
+    if isinstance(n, ast.Assign)
+    and any(
+        isinstance(t, ast.Name)
+        and t.id
+        in (
+            "DIFFICULTIES",
+            "difficulty_re",
+            "DIFFICULTY_FILL",
+            "DIFFICULTY_MIN_FILL",
+            "HERO_FROM_CHAPTER",
+            "hero_button_re",
+            "hero_state_re",
+            "HERO_SWITCH_DX",
+            "chapter_no_re",
+        )
+        for t in n.targets
+    )
+]
+ns = {"re": re, "cv2": cv2}
+exec(compile(ast.Module(body=consts + funcs + methods, type_ignores=[]), str(source), "exec"), ns)
+W, H = 1280, 768
+BLUE, RED, WHITE, GREY = (140, 110, 38), (40, 50, 170), (235, 235, 235), (150, 150, 150)  # BGR
+
+
+def box(name, x, y, w=36, h=18):
+    return SimpleNamespace(name=name, x=x, y=y, width=w, height=h)
+
+
+def paint(frame, b, color):
+    """把按钮文字框周围画成实心按钮的颜色。"""
+    cx, cy = b.x + b.width // 2, b.y + b.height // 2
+    frame[cy - 15 : cy + 15, cx - 56 : cx + 56] = color
+
+
+def map_frame(normal, hard):
+    frame = np.full((H, W, 3), 245, np.uint8)
+    n, h = box("普通", 1064, 723), box("困难", 1198, 723)
+    paint(frame, n, normal)
+    paint(frame, h, hard)
+    return frame, [n, h]
+
+
+class SelectedDifficultyTest(unittest.TestCase):
+    def test_filled_button_is_selected(self):
+        frame, boxes = map_frame(BLUE, GREY)
+        self.assertEqual(ns["selected_difficulty"](frame, boxes, H), "普通")
+        frame, boxes = map_frame(WHITE, RED)
+        self.assertEqual(ns["selected_difficulty"](frame, boxes, H), "困难")
+
+    def test_nothing_filled(self):
+        frame, boxes = map_frame(WHITE, GREY)
+        self.assertIsNone(ns["selected_difficulty"](frame, boxes, H))
+
+    def test_other_text_ignored(self):
+        frame = np.zeros((H, W, 3), np.uint8)
+        b = box("普通战斗", 600, 400)
+        paint(frame, b, BLUE)
+        self.assertIsNone(ns["selected_difficulty"](frame, [b], H))
+
+
+class ChapterNumberTest(unittest.TestCase):
+    def test_titles(self):
+        self.assertEqual(ns["chapter_number"]([box("/ 11.0 错位锚定·上篇", 560, 25)]), 11)
+        self.assertEqual(ns["chapter_number"]([box("C- 11.0.", 560, 15)]), 11)
+        self.assertEqual(ns["chapter_number"]([box("/4.0 逆序矩阵", 580, 25)]), 4)
+        self.assertIsNone(ns["chapter_number"]([box("240/240", 1010, 25)]))
+
+
+class FakeTask:
+    """地图 / 章节选择页 / 英雄难度窗口的最小模拟。"""
+
+    width, height = W, H
+
+    def __init__(self, difficulty="普通", hard_unlocked=True, hero=False, chapter=11, hero_switch_works=True):
+        self.page = "map"
+        self.difficulty = difficulty
+        self.select_difficulty = difficulty
+        self.hard_unlocked = hard_unlocked
+        self.hero = hero
+        self.chapter = chapter
+        self.hero_switch_works = hero_switch_works
+        self.log = []
+        self.clicks = []
+        self.backs = 0
+        self.frame = None
+        self.config = {}
+        for name in wanted:
+            setattr(self, name, ns[name].__get__(self))
+
+    # ---- 画面
+    def next_frame(self):
+        if self.page == "map":
+            normal, hard = (BLUE, GREY) if self.difficulty == "普通" else (WHITE, RED)
+        elif self.page == "select":
+            normal, hard = (BLUE, (20, 20, 20)) if self.select_difficulty == "普通" else ((20, 20, 20), RED)
+        else:
+            normal, hard = GREY, GREY
+        self.frame, self.diff_boxes = map_frame(normal, hard)
+
+    def ocr(self, box=None, match=None, log=False, **kw):
+        if match is ns["difficulty_re"]:
+            return list(self.diff_boxes) if self.page in ("map", "select") else []
+        if match is ns["hero_state_re"]:
+            return [box_("开启中" if self.hero else "未开启", 950, 590)] if self.page == "hero" else []
+        if box == "top":
+            return [box_(f"/ {self.chapter}.0 某章", 560, 25)] if self.page == "map" else []
+        return []
+
+    def wait_ocr(self, box=None, match=None, time_out=0, raise_if_not_found=False, **kw):
+        if match is ns["hero_button_re"]:
+            return [box_("英雄难度", 900, 723)] if self.page == "map" and self.chapter >= 11 else []
+        return self.ocr(box=box, match=match)
+
+    def click(self, target, after_sleep=0):
+        name = target[0].name
+        self.clicks.append(name)
+        if name == "英雄难度":
+            self.page = "hero"
+        elif name in ("普通", "困难"):
+            if self.page == "map" and (name == "普通" or self.hard_unlocked):
+                self.difficulty = name
+            elif self.page == "select":
+                self.select_difficulty = name
+
+    def click_relative(self, x, y, after_sleep=0):
+        self.clicks.append(("switch", round(x, 3)))
+        if self.page == "hero" and self.hero_switch_works:
+            self.hero = not self.hero
+
+    def back(self, after_sleep=0):
+        self.backs += 1
+        self.page = "map" if self.page == "hero" else "select"
+
+    def open_chapter_select(self):
+        self.page = "select"
+        return True
+
+    def reenter_from_chapter_select(self):
+        self.page = "map"
+        self.difficulty = self.select_difficulty
+        self.chapter = 4  # 困难只推到了 4.0
+        return True
+
+    def ensure_map(self):
+        return [object()]
+
+    def log_info(self, msg, notify=False):
+        self.log.append(msg)
+
+    def debug_shot(self, *a, **kw):
+        pass
+
+    def find_boxes(self, boxes, match=None, boundary=None):
+        return [b for b in boxes if any(re.search(m, b.name) for m in match)]
+
+    def fix_match_regex(self, words):
+        return words
+
+
+box_ = box
+
+
+class EnsureDifficultyTest(unittest.TestCase):
+    def test_already_right(self):
+        t = FakeTask("普通")
+        t.ensure_difficulty("普通")
+        self.assertEqual(t.clicks, [])
+
+    def test_switch_on_map(self):
+        t = FakeTask("普通", hard_unlocked=True)
+        t.ensure_difficulty("困难")
+        self.assertEqual((t.page, t.difficulty), ("map", "困难"))
+        self.assertEqual(t.clicks, ["困难"])
+
+    def test_hard_locked_falls_back_to_chapter_select(self):
+        # 实录：17.0 章地图上「困难」灰的带锁，章节选择页切到困难后选中的是困难 4.0
+        t = FakeTask("普通", hard_unlocked=False)
+        t.ensure_difficulty("困难")
+        self.assertEqual((t.page, t.difficulty, t.chapter), ("map", "困难", 4))
+        self.assertEqual(t.clicks, ["困难", "困难"])
+
+    def test_back_to_normal(self):
+        t = FakeTask("困难")
+        t.ensure_difficulty("普通")
+        self.assertEqual(t.difficulty, "普通")
+
+
+class EnsureHeroTest(unittest.TestCase):
+    def test_turn_on(self):
+        t = FakeTask(hero=False)
+        self.assertTrue(t.ensure_hero(True))
+        self.assertTrue(t.hero)
+        self.assertEqual(t.page, "map")
+        # 拨动开关在「未开启」文字中心右边
+        self.assertGreater(t.clicks[1][1], (950 + 18) / W)
+
+    def test_turn_off_when_disabled(self):
+        t = FakeTask(hero=True)
+        self.assertFalse(t.ensure_hero(False))
+        self.assertFalse(t.hero)
+
+    def test_already_on_only_closes_dialog(self):
+        t = FakeTask(hero=True)
+        self.assertTrue(t.ensure_hero(True))
+        self.assertEqual(t.clicks, ["英雄难度"])
+        self.assertEqual((t.page, t.backs), ("map", 1))
+
+    def test_no_button_before_chapter_11(self):
+        t = FakeTask(chapter=4)
+        self.assertFalse(t.ensure_hero(True))
+        self.assertEqual(t.clicks, [])
+        self.assertEqual(t.backs, 0)  # 地图上没窗口时按 ESC 会退到章节选择页
+
+    def test_missing_button_on_hero_chapter_raises(self):
+        t = FakeTask(chapter=12)
+        t.wait_ocr = lambda **kw: []
+        with self.assertRaises(Exception):
+            t.ensure_hero(True)
+
+    def test_switch_not_working_raises(self):
+        t = FakeTask(hero=False, hero_switch_works=False)
+        with self.assertRaises(Exception):
+            t.ensure_hero(True)
+
+
+class HeroPanelTest(unittest.TestCase):
+    def panel(self, hero):
+        t = FakeTask()
+        t.hero_mode = hero
+        # 实录：LZ-1-6 英雄难度面板只有挑战目标、敌方单位和「挑战」，没有「特殊奖励」
+        return t.panel_status([box("挑战目标", 1000, 190), box("敌方单位", 1000, 295), box("挑战", 1100, 715)])
+
+    def test_hero_panel_without_reward_is_played(self):
+        self.assertEqual(self.panel(True)[0], "challenge")
+
+    def test_normal_panel_without_reward_is_cleared(self):
+        self.assertEqual(self.panel(False)[0], "cleared")
+
+
+if __name__ == "__main__":
+    unittest.main()

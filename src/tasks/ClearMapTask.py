@@ -2,6 +2,7 @@ import re
 import time
 from collections import Counter
 
+import cv2
 from ok import Logger
 
 from src.core.BaseGfTask import BaseGfTask, chapter_select_re, map_re, nav_tabs_re, pop_ups
@@ -43,6 +44,52 @@ STATUS_TEXT = {
     "unknown": "面板反复读不到按钮, 跳过",
     "skip": "跳过",
 }
+
+
+# ------------------------------------------------------------------ 难度（实录 2026-10-21，1280x768 窗口）
+# 选关地图右下角是「英雄难度」「普通」「困难」三个按钮，章节选择页「确认」上面也有「普通 | 困难」切换。
+# 选中的难度按钮是实心的（普通蓝、困难红），没选中的是白底/黑底，本章困难没解锁时是灰的带锁：
+# 按钮文字周围彩色像素的占比，选中的约 0.8，其他都是 0。
+DIFFICULTIES = ("普通", "困难")
+difficulty_re = re.compile(r"^(普通|困难)$")
+DIFFICULTY_FILL = (0.052, 0.013)  # 按钮文字中心往外取多大一块看填充色（左右、上下半宽，按画面高）
+DIFFICULTY_MIN_FILL = 0.3
+# 「英雄难度」从 11.0 章开始才有，是全局开关：点地图右下角的按钮弹出说明窗，底部「开启中 / 未开启」+ 拨动开关。
+# 开着时关卡面板顶上标「英雄难度」、没有「特殊奖励」，卡片的对勾和勋章也按英雄难度单独算。
+HERO_FROM_CHAPTER = 11
+hero_button_re = re.compile(r"英雄难度")
+hero_state_re = re.compile(r"^(开启中|未开启)$")
+HERO_SWITCH_DX = 0.088  # 拨动开关中心在状态文字中心右边多远（按画面高）
+chapter_no_re = re.compile(r"(\d{1,2})\s*\.\s*\d")
+
+
+def difficulty_fill(frame, box, height):
+    """难度按钮文字周围彩色（实心按钮）像素的占比。"""
+    cx, cy = box.x + box.width / 2, box.y + box.height / 2
+    dx, dy = DIFFICULTY_FILL[0] * height, DIFFICULTY_FILL[1] * height
+    region = frame[max(0, int(cy - dy)) : int(cy + dy), max(0, int(cx - dx)) : int(cx + dx)]
+    if region.size == 0:
+        return 0.0
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    return float(((hsv[..., 1] > 90) & (hsv[..., 2] > 70)).mean())
+
+
+def selected_difficulty(frame, boxes, height):
+    """「普通」「困难」两个按钮里哪个是选中（实心）的；都不像选中的返回 None。"""
+    best, best_fill = None, DIFFICULTY_MIN_FILL
+    for b in boxes:
+        name = b.name.strip()
+        if name in DIFFICULTIES and (fill := difficulty_fill(frame, b, height)) > best_fill:
+            best, best_fill = name, fill
+    return best
+
+
+def chapter_number(boxes):
+    """地图顶上的章节标题「11.0 错位锚定·上篇」-> 11；读不到返回 None。"""
+    for b in boxes:
+        if m := chapter_no_re.search(b.name):
+            return int(m.group(1))
+    return None
 
 
 class ChapterLocked(Exception):
@@ -221,8 +268,11 @@ class ClearMapTask(BaseGfTask):
                 "除杂色OCR2": True,
                 "战斗内点击自动": False,
                 "推完继续下一章": True,
+                "难度": "普通",
+                "英雄难度": False,
             }
         )
+        self.config_type["难度"] = {"type": "drop_down", "options": list(DIFFICULTIES)}
         self.config_description.update(
             {
                 "普通OCR": (
@@ -245,9 +295,18 @@ class ClearMapTask(BaseGfTask):
                     "本章能推的都推完（或剩下的都没解锁）后，回章节选择页进入下一章继续推\n"
                     "下一章没解锁（带锁、点了没反应）就正常结束"
                 ),
+                "难度": (
+                    "推普通还是困难。困难和普通是两套章节进度：本章困难还没解锁时，回章节选择页切到困难，"
+                    "从困难当前推到的章节开始推"
+                ),
+                "英雄难度": (
+                    "11.0 及之后的章节开启游戏的「英雄难度」再推（没打过的关也直接按英雄难度打），关掉则确保游戏里也是关的\n"
+                    "英雄难度下敌人等级按指挥官等级匹配、额外附加不利效果，更容易打输；11.0 之前的章节没有英雄难度，照常推"
+                ),
             }
         )
         self.processors = []
+        self.hero_mode = False  # 当前章节是不是按英雄难度在推（影响面板判断：英雄难度的面板没有「特殊奖励」）
 
     # ------------------------------------------------------------------ 扫描
     def scan_maps(self):
@@ -297,7 +356,8 @@ class ClearMapTask(BaseGfTask):
         # wait_ocr 的 match 会经过 OCR 纠错表展开（現看/観看 → 观看），
         # 但 find_boxes 是精确比较，这里要用同样展开过的匹配列表
         locked_hint = self.find_boxes(boxes, match=self.fix_match_regex(["完成前置关卡解锁"]))
-        special_reward = self.find_boxes(boxes, match=self.fix_match_regex(["特殊奖励"]))
+        # 英雄难度的面板没有「特殊奖励」，没对勾就是没打过，不能当已通关
+        special_reward = self.hero_mode or self.find_boxes(boxes, match=self.fix_match_regex(["特殊奖励"]))
         challenge = self.find_boxes(boxes, match=self.fix_match_regex(["挑战"]))
         watch = self.find_boxes(boxes, match=self.fix_match_regex(["观看"]))
         return classify_panel(bool(boxes), bool(locked_hint), bool(special_reward), challenge, watch)
@@ -335,6 +395,7 @@ class ClearMapTask(BaseGfTask):
 
         total = 0
         for _ in range(30):
+            self.prepare_chapter()
             count, locked = self.finish_chapter()
             total += count
             if locked and not self.config.get("推完继续下一章", True):
@@ -351,6 +412,92 @@ class ClearMapTask(BaseGfTask):
             self.log_info(f"进入下一章「{nxt}」继续推图", notify=True)
             self.ensure_map()
         self.log_info(f"推图完成, 本次推进 {total} 关", notify=True)
+
+    # ------------------------------------------------------------------ 难度
+    def prepare_chapter(self):
+        """每章开推前：切到配置的难度，再按配置开 / 关英雄难度。"""
+        self.close_map_panel()  # 面板会盖住右下角的难度按钮
+        self.ensure_difficulty(self.config.get("难度") or "普通")
+        self.hero_mode = self.ensure_hero(bool(self.config.get("英雄难度", False)))
+
+    def read_difficulty(self):
+        """右下角难度按钮 -> (当前选中的难度, 按钮框)。"""
+        self.next_frame()
+        boxes = self.ocr(box="bottom_right", match=difficulty_re, log=True) or []
+        return selected_difficulty(self.frame, boxes, self.height), boxes
+
+    def ensure_difficulty(self, want):
+        """
+        选关地图上切到 want 难度。先点地图右下角的按钮（同一章切难度）；本章这个难度还没解锁（按钮灰的、点了没变），
+        就回章节选择页切难度，点「确认」进那个难度当前的章节。
+        """
+        current, boxes = self.read_difficulty()
+        if current == want:
+            return
+        self.log_info(f"当前是「{current or '?'}」难度，切到「{want}」", notify=True)
+        if target := [b for b in boxes if b.name.strip() == want]:
+            self.click(target, after_sleep=2)
+            self.ensure_map()
+            if self.read_difficulty()[0] == want:
+                return
+            self.log_info(f"本章「{want}」难度还没解锁，回章节选择页切难度", notify=True)
+        if not self.open_chapter_select():
+            raise Exception(f"切「{want}」难度时没回到章节选择页")
+        current, boxes = self.read_difficulty()
+        if current != want:
+            if not (target := [b for b in boxes if b.name.strip() == want]):
+                raise Exception(f"章节选择页没找到「{want}」按钮")
+            self.click(target, after_sleep=2)
+            current, _ = self.read_difficulty()
+            if current != want:
+                raise Exception(f"章节选择页切不到「{want}」难度")
+        self.debug_shot("difficulty_select")
+        if not self.reenter_from_chapter_select():
+            raise Exception(f"切到「{want}」后没进回章节")
+        self.ensure_map()
+        if self.read_difficulty()[0] != want:
+            raise Exception(f"进回章节后不是「{want}」难度")
+
+    def ensure_hero(self, want):
+        """
+        按 want 开 / 关英雄难度，返回本章是不是在按英雄难度推。
+        英雄难度是全局开关，但只有 11.0 之后的章节地图上才有按钮：没按钮的章节不用管，按普通推。
+        """
+        button = self.wait_ocr(box="bottom_right", match=hero_button_re, time_out=2, raise_if_not_found=False)
+        if not button:
+            chapter = chapter_number(self.ocr(box="top", log=True) or [])
+            if want and chapter is not None and chapter >= HERO_FROM_CHAPTER:
+                self.debug_shot("hero_button_missing")
+                raise Exception(f"{chapter} 章地图上没找到「英雄难度」按钮")
+            if want:
+                self.log_info(f"本章（{chapter or '?'}）没有英雄难度，11.0 之后才有，先按原难度推", notify=False)
+            return False
+        self.click(button, after_sleep=1.5)
+        on = None
+        for _ in range(3):
+            state = self.wait_ocr(box="bottom", match=hero_state_re, time_out=3, raise_if_not_found=False)
+            if not state:
+                self.debug_shot("hero_dialog")
+                raise Exception("英雄难度窗口里没读到「开启中 / 未开启」")
+            on = state[0].name.strip() == "开启中"
+            if on == want:
+                break
+            self.log_info(f"英雄难度「{state[0].name}」，{'打开' if want else '关掉'}它", notify=True)
+            s = state[0]
+            x = s.x + s.width / 2 + HERO_SWITCH_DX * self.height
+            self.click_relative(x / self.width, (s.y + s.height / 2) / self.height, after_sleep=1.5)
+        if on != want:
+            raise Exception(f"英雄难度没能{'打开' if want else '关掉'}")
+        self.debug_shot("hero_dialog")
+        # 关窗口：ESC。窗口不在时 ESC 会退回章节选择页，所以确认窗口还在才按
+        for _ in range(3):
+            if not self.ocr(box="bottom", match=hero_state_re):
+                break
+            self.back(after_sleep=1.5)
+        self.ensure_map()
+        if want:
+            self.log_info("本章按英雄难度推", notify=True)
+        return on
 
     # ------------------------------------------------------------------ 持续推进
     def open_chapter_select(self):
