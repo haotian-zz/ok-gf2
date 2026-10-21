@@ -444,15 +444,12 @@ class ClearMapTask(BaseGfTask):
             boxes = self.ocr()
             if self.find_boxes(boxes, match=map_re):
                 return True
-            # 「任务完成」结算页也交给 auto_battle：它会点掉结算，再看有没有「继续前进」
-            # （实录 2026-10-21：重启后停在剧情→结算页，这里没认「任务完成」，和 skip_dialogs 互相踢皮球卡了 15 分钟）
             if (
                 self.find_boxes(boxes, match="作战开始")
                 or self._is_battle_frame(boxes)
                 or self.find_boxes(boxes, match="继续前进")
-                or self.find_boxes(boxes, match="任务完成")
             ):
-                self.log_info("当前在部署界面、战斗中或结算页，先打完这一关再继续推图", notify=True)
+                self.log_info("当前在部署界面或战斗中，先打完这一关再继续推图", notify=True)
                 self.auto_battle(
                     end_match=BACK_TO_MAP, has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False)
                 )
@@ -467,6 +464,11 @@ class ClearMapTask(BaseGfTask):
                 continue
             if self.find_boxes(boxes, match=pop_ups):
                 self.back(after_sleep=1)
+                continue
+            # 结算页第一段只有人物和「任务完成」，点一下才出奖励页（奖励页的「确认」走上面的分支）
+            # （实录 2026-10-21：重启后停在剧情→结算页，这里没认「任务完成」，和 skip_dialogs 互相踢皮球卡了 15 分钟）
+            if done := self.find_boxes(boxes, match="任务完成"):
+                self.click(done, after_sleep=2)
                 continue
             # 认不出的页面多半是剧情对话（没有可识别文字），按 skip_dialogs 的方式点右上角跳过
             unknown += 1
