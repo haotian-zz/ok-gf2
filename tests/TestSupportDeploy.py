@@ -38,6 +38,10 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(ss.tutorial_step(["可露凯", "点击地格上的支援单位部署点。"]), "tile")
         self.assertEqual(ss.tutorial_step(["可露凯", "……最后的提示，这次战斗，部署防御工事为好。", "点击部署支援单位。"]), "button")
         self.assertEqual(ss.tutorial_step(["可露凯", "但还是提醒一下，每个关卡的支援单位种类、最大上阵数量都可能发生变化。"]), "advance")
+        # 实录 2026-10-20 第二次进 BH-9-1 的开场白：提到「部署支援单位」但不是让你点按钮
+        self.assertEqual(ss.tutorial_step(["可露凯", "支援", "在特定关卡内，战前部署支援单位可以让作战效率大幅提", "高。"]), "advance")
+        self.assertEqual(ss.tutorial_step(["可露凯", "支援箱", "最后的提示，这次战斗，部署防御工事为好。", "点击部署支援单位", "冠眼"]), "button")
+        self.assertEqual(ss.tutorial_step(["可露凯", "右侧是支援单位列表。基于战场和战术，选择部署适合的", "支援单位……这些想必不用我多说。"]), "advance")
         self.assertIsNone(ss.tutorial_step(["支援", "2/3"]))  # 计数行不是引导
         self.assertIsNone(ss.tutorial_step(["全部歼灭", "在本次作战中取得胜利"]))
         self.assertIsNone(ss.tutorial_step([]))

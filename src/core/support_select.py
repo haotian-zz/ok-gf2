@@ -566,7 +566,8 @@ def tutorial_step(names):
     text = "".join(names)
     if "部署点" in text:
         return "tile"
-    if "部署支援单位" in text:
+    # 实录：开场白「战前部署支援单位可以让作战效率大幅提高」也含这几个字，只有「点击部署支援单位」才是点按钮
+    if re.search(r"点击.{0,3}部署支援单位", text):
         return "button"
     return "advance"
 
