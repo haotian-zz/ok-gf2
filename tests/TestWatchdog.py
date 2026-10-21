@@ -43,7 +43,9 @@ class TestWatchdog(unittest.TestCase):
         # 实录：游戏窗口被最小化时 ok-script 暂停执行器，恢复窗口后不会自己继续
         self.assertIn("最小化", watchdog_message(130, True, False, "x", window_hidden=True))
         self.assertNotIn("F9", watchdog_message(130, True, False, "x", window_hidden=True))
-        self.assertIn("卡在 TaskExecutor.py:385 sleep", watchdog_message(130, False, False, "TaskExecutor.py:385 sleep"))
+        self.assertIn(
+            "卡在 TaskExecutor.py:385 sleep", watchdog_message(130, False, False, "TaskExecutor.py:385 sleep")
+        )
 
     def test_describe_screen(self):
         self.assertEqual(describe_screen(["任务完成", "继续前进", "确认"]), "结算页")

@@ -34,7 +34,10 @@ class DeployTilesTest(unittest.TestCase):
         tiles = ss.find_deploy_tiles(frame, W, H)
         centers = [t["center"] for t in tiles]
         for cx, cy in expected:
-            self.assertTrue(any(abs(x - cx) < 10 and abs(y - cy) < 10 for x, y in centers), f"没认出 ({cx},{cy})，认出的是 {centers}")
+            self.assertTrue(
+                any(abs(x - cx) < 10 and abs(y - cy) < 10 for x, y in centers),
+                f"没认出 ({cx},{cy})，认出的是 {centers}",
+            )
         return tiles
 
     def test_bright_tiles_of_normal_stage(self):

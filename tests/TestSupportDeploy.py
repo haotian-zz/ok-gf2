@@ -9,7 +9,6 @@ import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import cv2
 
@@ -39,19 +38,42 @@ class ParseTest(unittest.TestCase):
 
     def test_tutorial_step(self):
         self.assertEqual(ss.tutorial_step(["可露凯", "点击地格上的支援单位部署点。"]), "tile")
-        self.assertEqual(ss.tutorial_step(["可露凯", "……最后的提示，这次战斗，部署防御工事为好。", "点击部署支援单位。"]), "button")
-        self.assertEqual(ss.tutorial_step(["可露凯", "但还是提醒一下，每个关卡的支援单位种类、最大上阵数量都可能发生变化。"]), "advance")
+        self.assertEqual(
+            ss.tutorial_step(["可露凯", "……最后的提示，这次战斗，部署防御工事为好。", "点击部署支援单位。"]), "button"
+        )
+        self.assertEqual(
+            ss.tutorial_step(["可露凯", "但还是提醒一下，每个关卡的支援单位种类、最大上阵数量都可能发生变化。"]),
+            "advance",
+        )
         # 实录 2026-10-20 第二次进 BH-9-1 的开场白：提到「部署支援单位」但不是让你点按钮
-        self.assertEqual(ss.tutorial_step(["可露凯", "支援", "在特定关卡内，战前部署支援单位可以让作战效率大幅提", "高。"]), "advance")
-        self.assertEqual(ss.tutorial_step(["可露凯", "支援箱", "最后的提示，这次战斗，部署防御工事为好。", "点击部署支援单位", "冠眼"]), "button")
-        self.assertEqual(ss.tutorial_step(["可露凯", "右侧是支援单位列表。基于战场和战术，选择部署适合的", "支援单位……这些想必不用我多说。"]), "advance")
+        self.assertEqual(
+            ss.tutorial_step(["可露凯", "支援", "在特定关卡内，战前部署支援单位可以让作战效率大幅提", "高。"]),
+            "advance",
+        )
+        self.assertEqual(
+            ss.tutorial_step(
+                ["可露凯", "支援箱", "最后的提示，这次战斗，部署防御工事为好。", "点击部署支援单位", "冠眼"]
+            ),
+            "button",
+        )
+        self.assertEqual(
+            ss.tutorial_step(
+                ["可露凯", "右侧是支援单位列表。基于战场和战术，选择部署适合的", "支援单位……这些想必不用我多说。"]
+            ),
+            "advance",
+        )
         self.assertIsNone(ss.tutorial_step(["支援", "2/3"]))  # 计数行不是引导
         self.assertIsNone(ss.tutorial_step(["全部歼灭", "在本次作战中取得胜利"]))
         self.assertIsNone(ss.tutorial_step([]))
 
     def test_support_card_points_sorted_and_offsets(self):
         w, h = 1280, 720
-        boxes = [box("Lv.20", 1120, 265, 40, 14), box("Lv.20", 1020, 152, 40, 14), box("Lv.20", 1110, 152, 40, 14), box("3207", 1020, 300)]
+        boxes = [
+            box("Lv.20", 1120, 265, 40, 14),
+            box("Lv.20", 1020, 152, 40, 14),
+            box("Lv.20", 1110, 152, 40, 14),
+            box("3207", 1020, 300),
+        ]
         cards = ss.support_card_points(boxes, w, h)
         self.assertEqual([c["lv"] for c in cards], ["Lv.20"] * 3)
         self.assertEqual([c["center"][0] for c in cards], [1040, 1130, 1140])  # 先上一行（左到右），再下一行
@@ -72,7 +94,11 @@ class FixtureTest(unittest.TestCase):
     def test_deployed_support_card_has_orange_check(self):
         frame = cv2.imread(str(FIX / "support_tab_deployed_1280x720.jpg"))
         # 面板第一行三张卡的「Lv.20」标签中心（实测），第一张已部署（1/3）
-        cards = ss.support_card_points([box("Lv.20", 1012, 150, 40, 14), box("Lv.20", 1105, 150, 40, 14), box("Lv.20", 1197, 150, 40, 14)], 1280, 720)
+        cards = ss.support_card_points(
+            [box("Lv.20", 1012, 150, 40, 14), box("Lv.20", 1105, 150, 40, 14), box("Lv.20", 1197, 150, 40, 14)],
+            1280,
+            720,
+        )
         flags = [ss.is_orange_check(frame, *c["check"]) for c in cards]
         self.assertEqual(flags, [True, False, False])
 
@@ -92,7 +118,17 @@ class FixtureTest(unittest.TestCase):
 source = ROOT / "src/core/BaseGfTask.py"
 tree = ast.parse(source.read_text(encoding="utf-8"))
 cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "BaseGfTask")
-wanted = ("_support_count", "_support_button", "_click_support_tab", "_ensure_unit_tab", "_support_cards", "_support_card_placed", "_click_support_card", "_follow_support_tutorial", "deploy_supports")
+wanted = (
+    "_support_count",
+    "_support_button",
+    "_click_support_tab",
+    "_ensure_unit_tab",
+    "_support_cards",
+    "_support_card_placed",
+    "_click_support_card",
+    "_follow_support_tutorial",
+    "deploy_supports",
+)
 methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
 ns = {
     "re": re,
@@ -188,7 +224,11 @@ class TutorialFlowTest(unittest.TestCase):
         self.assertTrue(task._follow_support_tutorial())
         self.assertEqual(
             task.calls,
-            [("click_rel", 0.5, 0.546), ("click", "但还是提醒一下，每个关卡的支援单位种类、最大上阵数量都可能发生变化。"), ("click", "部署支援单位")],
+            [
+                ("click_rel", 0.5, 0.546),
+                ("click", "但还是提醒一下，每个关卡的支援单位种类、最大上阵数量都可能发生变化。"),
+                ("click", "部署支援单位"),
+            ],
         )
 
     def test_no_tutorial_does_nothing(self):
@@ -220,7 +260,9 @@ class FakeGame(FakeTask):
         checks = set()
         for i, deployed in enumerate(self.cards_deployed):
             if deployed:
-                checks.add((int(10 + i * 100 + ss.SUPPORT_CHECK_DX * 1280), int(10 + ss.SUPPORT_CHECK_DY * 720)))  # Lv 标签框中心 (10+100i, 10)
+                checks.add(
+                    (int(10 + i * 100 + ss.SUPPORT_CHECK_DX * 1280), int(10 + ss.SUPPORT_CHECK_DY * 720))
+                )  # Lv 标签框中心 (10+100i, 10)
         return {"checks": checks, "tiles": list(self.tiles)}
 
     def next_frame(self):

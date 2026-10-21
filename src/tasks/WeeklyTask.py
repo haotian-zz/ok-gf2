@@ -157,7 +157,7 @@ class WeeklyTask(BaseGfTask):
         unlocked = []
         for b in cards:
             pad = int(b.width * 0.3)
-            region = self.frame[int(b.y):int(b.y + b.height), max(0, int(b.x) - pad):int(b.x + b.width) + pad]
+            region = self.frame[int(b.y) : int(b.y + b.height), max(0, int(b.x) - pad) : int(b.x + b.width) + pad]
             gray = float(cv2.cvtColor(region, cv2.COLOR_BGR2GRAY).mean()) if region.size else 0.0
             self.log_info(f"特殊增强 x={int(b.x)} 标题灰度 {round(gray)}", notify=False)
             if gray > 170:
@@ -171,7 +171,7 @@ class WeeklyTask(BaseGfTask):
         if not boxes or self.frame is None:
             return True
         b = boxes[0]
-        region = self.frame[int(b.y):int(b.y + b.height), int(b.x):int(b.x + b.width)]
+        region = self.frame[int(b.y) : int(b.y + b.height), int(b.x) : int(b.x + b.width)]
         if region.size == 0:
             return True
         sat = float(cv2.cvtColor(region, cv2.COLOR_BGR2HSV)[..., 1].mean())

@@ -11,46 +11,41 @@ from ok import BaseTask, Box, Logger, TriggerTask, find_boxes_by_name
 
 from src.core.base_mixin.lineup_mixin import LineupMixin
 from src.core.base_mixin.runtime_mixin import RuntimeMixin
-from src.core.debug_shot import save_debug_shot
-from src.core.lineup_plan import deploy_count_from_boxes, parse_count_text
-from src.core.support_select import (
-    AvatarBook,
-    BUTTON_BOX,
-    COUNT_BOX,
-    empty_tiles,
-    fallback_empty_tiles,
-    far_point,
-    find_cards,
-    find_deploy_tiles,
-    find_tiles,
-    find_tutorial_tile,
-    find_unit_tags,
-    identify_cards,
-    is_orange_check,
-    MAP_BOX,
-    merge_tiles,
-    NAME_BOX,
-    order_tiles,
-    PANEL_BOX,
-    parse_support_count,
-    read_badge,
-    support_card_points,
-    SUPPORT_COUNT_BOX,
-    support_lv_re,
-    support_point_candidates,
-    SUPPORT_TAB_BOX,
-    SUPPORT_TAB_XY,
-    TAB_BOX,
-    TUTORIAL_BOX,
-    tutorial_step,
-    unit_tiles_from_tags,
-)
 from src.core.debug_config import DEBUG_OPTION_NAME, KEY_DEBUG_SHOT
-from src.core.stamina_config import KEY_AUTO_POTION, STAMINA_OPTION_NAME
+from src.core.debug_shot import save_debug_shot
 from src.core.lineup_config import (
     LINEUP_OPTION_NAME,
     preset_name_for_kind,
     support_enabled_for_kind,
+)
+from src.core.lineup_plan import deploy_count_from_boxes, parse_count_text
+from src.core.stamina_config import KEY_AUTO_POTION, STAMINA_OPTION_NAME
+from src.core.support_select import (
+    BUTTON_BOX,
+    COUNT_BOX,
+    NAME_BOX,
+    PANEL_BOX,
+    SUPPORT_COUNT_BOX,
+    SUPPORT_TAB_BOX,
+    SUPPORT_TAB_XY,
+    TAB_BOX,
+    TUTORIAL_BOX,
+    AvatarBook,
+    fallback_empty_tiles,
+    far_point,
+    find_cards,
+    find_deploy_tiles,
+    find_tutorial_tile,
+    find_unit_tags,
+    identify_cards,
+    is_orange_check,
+    parse_support_count,
+    read_badge,
+    support_card_points,
+    support_lv_re,
+    support_point_candidates,
+    tutorial_step,
+    unit_tiles_from_tags,
 )
 from src.data.FeatureList import FeatureList as fL
 from src.image.frame_processs import isolate_by_hsv_ranges
@@ -207,7 +202,6 @@ def parse_deploy_count(text):
     return parse_count_text(text)
 
 
-
 ZILV_GRAY_GAP = 25  # 自律按钮比同一帧的挑战按钮暗这么多（灰度均值）就当它是灰色未解锁
 
 
@@ -338,7 +332,12 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         if executor_paused and self._game_window_hidden():
             self._paused_by_window = True
             return
-        if self._paused_by_window and executor_paused and not getattr(self, "_paused", False) and not self._game_window_hidden():
+        if (
+            self._paused_by_window
+            and executor_paused
+            and not getattr(self, "_paused", False)
+            and not self._game_window_hidden()
+        ):
             logger.info("[看门狗] 游戏窗口恢复了，自动继续被最小化打断的任务")
             self._paused_by_window = False
             self.executor.start()
@@ -404,7 +403,9 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         executor_paused = bool(getattr(self.executor, "paused", False))
         task_paused = bool(getattr(self, "_paused", False))
         where = self._executor_where()
-        msg = watchdog_message(stalled, executor_paused, task_paused, where, self._game_window_hidden() or self._paused_by_window)
+        msg = watchdog_message(
+            stalled, executor_paused, task_paused, where, self._game_window_hidden() or self._paused_by_window
+        )
         path = None
         try:
             frame = getattr(self.executor, "_frame", None)
@@ -558,7 +559,9 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
                 self.sleep(2)
             self.next_frame()
         where = describe_screen([b.name for b in boxes])
-        self.log_info(f"等 {time_out} 秒没等到 {end_match}，当前在{where}: {[b.name for b in boxes][:12]}", notify=False)
+        self.log_info(
+            f"等 {time_out} 秒没等到 {end_match}，当前在{where}: {[b.name for b in boxes][:12]}", notify=False
+        )
         self.debug_shot(f"skip_dialogs_timeout_{where}")
         if raise_if_not_found:
             raise Exception(f"跳过剧情超时! 当前在{where}")
@@ -640,12 +643,14 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         return support_enabled_for_kind(self._lineup_cfg(), self._lineup_kind)
 
     def _preset_boxes(self):
-        return self._ocr_panel(PRESET_BOX, match=[re.compile(r"编队\s*\d"), re.compile(r"整备室配置"), re.compile(r".{1,12}")])
+        return self._ocr_panel(
+            PRESET_BOX, match=[re.compile(r"编队\s*\d"), re.compile(r"整备室配置"), re.compile(r".{1,12}")]
+        )
 
     @staticmethod
     def _preset_text_like(text, name):
         t = (text or "").replace(" ", "")
-        return bool(name) and (name in t or t in name and len(t) >= 2)
+        return bool(name) and (name in t or (t in name and len(t) >= 2))
 
     def _preset_state(self):
         """下拉框区域 OCR：(全部, 标题行, 标题下方, 下方里的编队/整备室配置条目)。条目 >= 2 说明列表展开着。"""
@@ -748,7 +753,12 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
             boxes, header, below, entries = self._preset_state()
         ok = any(self._preset_text_like(b.name, name) for b in header)
         self.debug_shot("preset_applied", boxes)
-        self.log_info(f"已切到编队「{name}」，阵容 {self._deploy_count()}" if ok else f"点了编队「{name}」但标题没变: {[b.name for b in header]}", notify=True)
+        self.log_info(
+            f"已切到编队「{name}」，阵容 {self._deploy_count()}"
+            if ok
+            else f"点了编队「{name}」但标题没变: {[b.name for b in header]}",
+            notify=True,
+        )
         return ok
 
     def _deploy_count(self):
@@ -851,7 +861,10 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         tiles = find_deploy_tiles(self.frame, self.width, self.height)
         near = lambda t: any((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 < 45**2 for x, y in occupied)
         empty = [t for t in tiles if not near(t)]
-        self.log_info(f"单位标签 {[(x, y, sc) for x, y, sc in tags]}，空地格 {[(t['center'], t['fill']) for t in empty]}", notify=False)
+        self.log_info(
+            f"单位标签 {[(x, y, sc) for x, y, sc in tags]}，空地格 {[(t['center'], t['fill']) for t in empty]}",
+            notify=False,
+        )
         return occupied, empty
 
     def _candidate_tiles(self):
@@ -867,7 +880,9 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         else:
             # 刚撤人空出来的格子最可靠（前后两帧对比找的），排最前
             out = [((x, y), f"刚空出的地格({int(x)},{int(y)})") for x, y in (self._freed_tiles or [])]
-            out += [(t["center"], f"空地格({int(t['center'][0])},{int(t['center'][1])}, 填充 {t['fill']})") for t in empty]
+            out += [
+                (t["center"], f"空地格({int(t['center'][0])},{int(t['center'][1])}, 填充 {t['fill']})") for t in empty
+            ]
             extra = fallback_empty_tiles(self.frame, self.width, self.height, [c for c, _ in out], occupied)
             out += [(c, f"兜底地格({int(c[0])},{int(c[1])})") for c in extra]
         self.log_info(f"阵容 {count}，候选地格 {len(out)} 个", notify=False)
@@ -1030,7 +1045,10 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
     def _support_card_placed(self, card):
         """部署后重新扫一遍卡片，同一位置的卡片是否打上了橙色勾。"""
         for c in self._support_cards():
-            if abs(c["center"][0] - card["center"][0]) < 0.02 * self.width and abs(c["center"][1] - card["center"][1]) < 0.03 * self.height:
+            if (
+                abs(c["center"][0] - card["center"][0]) < 0.02 * self.width
+                and abs(c["center"][1] - card["center"][1]) < 0.03 * self.height
+            ):
                 return c["deployed"]
         return False
 
@@ -1226,7 +1244,9 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
                     return True
                 after = stamina_value(boxes, self.height)
                 if before is not None and after is not None and after > before:
-                    self.log_info(f"已用体力弹窗页签{idx + 1} 恢复体力 {before}→{after}，弹窗还开着，关掉继续", notify=True)
+                    self.log_info(
+                        f"已用体力弹窗页签{idx + 1} 恢复体力 {before}→{after}，弹窗还开着，关掉继续", notify=True
+                    )
                     self.debug_shot("stamina_restored", boxes)
                     self._cancel_stamina_popup()
                     return True
@@ -1325,7 +1345,10 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
                 else:
                     self.log_info("阵容已整理过，沿用上一场直接开战", notify=False)
             elif lineup_on:
-                self.log_info(f"第一次进「{self._lineup_kind or '推图'}」部署界面，整理阵容（编队：{self._preset_name() or '不切'}）", notify=True)
+                self.log_info(
+                    f"第一次进「{self._lineup_kind or '推图'}」部署界面，整理阵容（编队：{self._preset_name() or '不切'}）",
+                    notify=True,
+                )
                 self.prepare_lineup()
                 self._mark_lineup_verified()
             if lineup_on:
@@ -1438,7 +1461,18 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         clicked_continue = False
         while results := self.skip_dialogs(
             # 实录 2026-10-20：真实输入下角落点击会把结算页点过去，等到的直接是选关页面，也算打完了
-            end_match=["任务完成", "任务失败", "战斗失败", "对战胜利", "对战失败", "确认", "确认结算", "继续前进", map_re, chapter_select_re],
+            end_match=[
+                "任务完成",
+                "任务失败",
+                "战斗失败",
+                "对战胜利",
+                "对战失败",
+                "确认",
+                "确认结算",
+                "继续前进",
+                map_re,
+                chapter_select_re,
+            ],
             time_out=900,
             has_dialog=has_dialog,
         ):
@@ -2067,7 +2101,11 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         for attempt in range(3):
             # 实录：点自律后画面会暗一下（灰度 55），这时点「挑战」没反应；点完没离开面板就再点
             if not self.wait_click_ocr(
-                match=challenge_button_re, box=self.box.bottom_right, time_out=5, after_sleep=2, raise_if_not_found=False
+                match=challenge_button_re,
+                box=self.box.bottom_right,
+                time_out=5,
+                after_sleep=2,
+                raise_if_not_found=False,
             ):
                 self.debug_shot("manual_challenge_missing")
                 raise Exception("自律不可用，但选关面板上也没找到「挑战」按钮")
@@ -2085,13 +2123,19 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
                 self.log_info("体力不足，已用体力药恢复，重新点「挑战」", notify=True)
                 self.next_frame()
                 if not self.wait_click_ocr(
-                    match=challenge_button_re, box=self.box.bottom_right, time_out=5, after_sleep=2, raise_if_not_found=False
+                    match=challenge_button_re,
+                    box=self.box.bottom_right,
+                    time_out=5,
+                    after_sleep=2,
+                    raise_if_not_found=False,
                 ):
                     raise Exception("恢复体力后没找到「挑战」按钮")
             else:
                 self.log_info("点挑战弹出体力不足，今天的体力刷完了", notify=True)
                 self._cancel_stamina_popup()
-                self.wait_ocr(match=challenge_button_re, box=self.box.bottom_right, time_out=5, raise_if_not_found=False)
+                self.wait_ocr(
+                    match=challenge_button_re, box=self.box.bottom_right, time_out=5, raise_if_not_found=False
+                )
                 return 0
         self.auto_battle(end_match=["自律", "挑战"], end_box=self.box.bottom_right)
         self.sleep(1)

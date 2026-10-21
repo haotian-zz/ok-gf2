@@ -40,32 +40,57 @@ if IS_WINDOWS:  # pragma: no cover - 只在 Windows 上有这些模块
     _kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     _user = ctypes.WinDLL("user32", use_last_error=True)
     _kernel.CreateFileW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
     ]
     _kernel.CreateFileW.restype = wintypes.HANDLE
     _kernel.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
     _kernel.CreateEventW.restype = wintypes.HANDLE
     _kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     _kernel.DeviceIoControl.argtypes = [
-        wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
-        ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
     ]
     _kernel.DeviceIoControl.restype = wintypes.BOOL
     _user.GetRawInputData.argtypes = [
-        wintypes.HANDLE, wintypes.UINT, ctypes.c_void_p, ctypes.POINTER(wintypes.UINT), wintypes.UINT,
+        wintypes.HANDLE,
+        wintypes.UINT,
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.UINT),
+        wintypes.UINT,
     ]
     _user.GetRawInputData.restype = wintypes.UINT
 
     class MousePacket(ctypes.Structure):
         _fields_ = [
-            ("unit", wintypes.WORD), ("flags", wintypes.WORD), ("buttons", wintypes.WORD),
-            ("wheel", wintypes.WORD), ("raw", wintypes.DWORD), ("x", wintypes.LONG),
-            ("y", wintypes.LONG), ("extra", wintypes.DWORD),
+            ("unit", wintypes.WORD),
+            ("flags", wintypes.WORD),
+            ("buttons", wintypes.WORD),
+            ("wheel", wintypes.WORD),
+            ("raw", wintypes.DWORD),
+            ("x", wintypes.LONG),
+            ("y", wintypes.LONG),
+            ("extra", wintypes.DWORD),
         ]
 
     class RawInputDevice(ctypes.Structure):
-        _fields_ = [("page", wintypes.WORD), ("usage", wintypes.WORD), ("flags", wintypes.DWORD), ("hwnd", wintypes.HWND)]
+        _fields_ = [
+            ("page", wintypes.WORD),
+            ("usage", wintypes.WORD),
+            ("flags", wintypes.DWORD),
+            ("hwnd", wintypes.HWND),
+        ]
 
     _user.RegisterRawInputDevices.argtypes = [ctypes.POINTER(RawInputDevice), wintypes.UINT, wintypes.UINT]
     _user.RegisterRawInputDevices.restype = wintypes.BOOL
@@ -154,10 +179,14 @@ class _Channel:
     def ioctl(self, code, data=None, result=None):
         size = wintypes.DWORD()
         ok = _kernel.DeviceIoControl(
-            self.handle, code,
-            ctypes.byref(data) if data is not None else None, ctypes.sizeof(data) if data is not None else 0,
-            ctypes.byref(result) if result is not None else None, ctypes.sizeof(result) if result is not None else 0,
-            ctypes.byref(size), None,
+            self.handle,
+            code,
+            ctypes.byref(data) if data is not None else None,
+            ctypes.sizeof(data) if data is not None else 0,
+            ctypes.byref(result) if result is not None else None,
+            ctypes.sizeof(result) if result is not None else 0,
+            ctypes.byref(size),
+            None,
         )
         if not ok:
             raise ctypes.WinError(ctypes.get_last_error())

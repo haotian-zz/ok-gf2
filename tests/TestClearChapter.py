@@ -22,9 +22,29 @@ consts = [
     n
     for n in tree.body
     if isinstance(n, ast.Assign)
-    and any(isinstance(t, ast.Name) and t.id in ("CHAPTER_MAX_PASSES", "STAGE_MAX_ATTEMPTS", "ENSURE_MAP_TRIES", "PASS_MAX_STEPS", "STATUS_TEXT", "MAP_DRAG_Y", "CHAPTER_VERIFY_ROUNDS", "BACK_TO_MAP") for t in n.targets)
+    and any(
+        isinstance(t, ast.Name)
+        and t.id
+        in (
+            "CHAPTER_MAX_PASSES",
+            "STAGE_MAX_ATTEMPTS",
+            "ENSURE_MAP_TRIES",
+            "PASS_MAX_STEPS",
+            "STATUS_TEXT",
+            "MAP_DRAG_Y",
+            "CHAPTER_VERIFY_ROUNDS",
+            "BACK_TO_MAP",
+        )
+        for t in n.targets
+    )
 ]
-ns = {"re": re, "Counter": Counter, "map_re": re.compile("x"), "chapter_select_re": re.compile("^章节进度$"), "nav_tabs_re": re.compile("剧情战役|模拟作战")}
+ns = {
+    "re": re,
+    "Counter": Counter,
+    "map_re": re.compile("x"),
+    "chapter_select_re": re.compile("^章节进度$"),
+    "nav_tabs_re": re.compile("剧情战役|模拟作战"),
+}
 ns["has_clear_badge"] = lambda frame, card, w, h: frame.badge(card)
 exec(compile(ast.Module(body=consts + funcs + methods, type_ignores=[]), str(source), "exec"), ns)
 
@@ -192,7 +212,9 @@ class ClearChapterTest(unittest.TestCase):
         game.blank_after = {"LS-1-7": 2}
         game.camera_after = {f"LA-1-{i}": 300 * i + 300 for i in range(1, 17)}  # 继续前进把镜头带着走
         played, locked = game.clear_chapter()
-        self.assertTrue(all(st["done"] for st in game.stages.values()), [n for n, s in game.stages.items() if not s["done"]])
+        self.assertTrue(
+            all(st["done"] for st in game.stages.values()), [n for n, s in game.stages.items() if not s["done"]]
+        )
         self.assertEqual(locked, [])
         self.assertEqual(played, len(game.stages))
         self.assertEqual(len(game.played), len(set(game.played)))  # 每关只打一次
@@ -258,11 +280,19 @@ class ClearChapterTest(unittest.TestCase):
         game = FakeChapter(chapter_11())
         game.blind_scrolls = 5  # 往右挪有五次「看不到新卡片」，分散在前后几遍里
         played, locked = game.finish_chapter()
-        self.assertTrue(all(st["done"] for st in game.stages.values()), [n for n, s in game.stages.items() if not s["done"]])
+        self.assertTrue(
+            all(st["done"] for st in game.stages.values()), [n for n, s in game.stages.items() if not s["done"]]
+        )
         self.assertEqual(game.chapter_percent(), 100)
 
     def test_progress_short_but_nothing_left_moves_on(self):
-        game = FakeChapter({"1-1": {"x": 100, "done": True}, "1-2": {"x": 500, "done": False, "needs": ["永远"]}, "永远": {"x": 900, "done": False, "needs": ["永远"]}})
+        game = FakeChapter(
+            {
+                "1-1": {"x": 100, "done": True},
+                "1-2": {"x": 500, "done": False, "needs": ["永远"]},
+                "永远": {"x": 900, "done": False, "needs": ["永远"]},
+            }
+        )
         played, locked = game.finish_chapter()
         self.assertEqual(played, 0)
         self.assertTrue(any("没有能推的关了" in m for m in game.log), game.log)
@@ -346,7 +376,11 @@ class StageCardTest(unittest.TestCase):
         )
         self.check(
             "map_chapter_end_2560x1440.jpg",
-            {"LA-1-17": (488, 672, 154, 36, True), "LS-1-7": (1234, 672, 128, 36, True), "LZ-1-6": (1594, 912, 128, 36, False)},
+            {
+                "LA-1-17": (488, 672, 154, 36, True),
+                "LS-1-7": (1234, 672, 128, 36, True),
+                "LZ-1-6": (1594, 912, 128, 36, False),
+            },
         )
 
     def test_parse_medals(self):

@@ -21,7 +21,10 @@ consts = [
     n
     for n in tree.body
     if isinstance(n, ast.Assign)
-    and any(isinstance(t, ast.Name) and t.id in ("restart_required_re", "GAME_RESTART_TITLE_TIMEOUT", "GAME_EXIT_TIMEOUT") for t in n.targets)
+    and any(
+        isinstance(t, ast.Name) and t.id in ("restart_required_re", "GAME_RESTART_TITLE_TIMEOUT", "GAME_EXIT_TIMEOUT")
+        for t in n.targets
+    )
 ]
 ns = {"re": re, "time": time}
 exec(compile(ast.Module(body=consts + methods, type_ignores=[]), str(source), "exec"), ns)
@@ -52,7 +55,11 @@ class HandleRestartRequiredTest(unittest.TestCase):
 
         def ocr(box=None, match=None, log=False, **kw):
             if box == "center":
-                return [box_("资源更新完毕，需要重新启动游戏")] if dialog and match.search("资源更新完毕，需要重新启动游戏") else []
+                return (
+                    [box_("资源更新完毕，需要重新启动游戏")]
+                    if dialog and match.search("资源更新完毕，需要重新启动游戏")
+                    else []
+                )
             if box == "bottom" and dialog:
                 return [box_("确认")] if match.search("确认") else []
             return []

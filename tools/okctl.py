@@ -140,7 +140,10 @@ def _log_lines(payload):
     out = []
     for item in payload or []:
         if isinstance(item, dict):
-            out.append(" ".join(str(item.get(k)) for k in ("time", "level", "message") if item.get(k) is not None) or json.dumps(item, ensure_ascii=False))
+            out.append(
+                " ".join(str(item.get(k)) for k in ("time", "level", "message") if item.get(k) is not None)
+                or json.dumps(item, ensure_ascii=False)
+            )
         else:
             out.append(str(item))
     return out

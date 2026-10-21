@@ -15,6 +15,8 @@ support_power_re = re.compile(r"^\D?\d{4,6}$")
 
 def power_of(box):
     return int(re.sub(r"\D", "", box.name))
+
+
 # 前哨战编队界面右下「阵容」：我方格子在左，最右一格是班组助战（关掉助战开关时也是我方格子）
 OUTPOST_OWN_SLOTS = (0.61, 0.69, 0.87, 0.83)
 OUTPOST_SUPPORT_SLOT = (0.87, 0.69, 0.97, 0.83)
@@ -247,7 +249,9 @@ class DailyBattleMixin:
                     self.info_set("尘烟", f"攻坚战未解锁：{locked[0].name}")
                     assault_locked = True
                 else:
-                    self.wait_click_ocr(match="开始作战", box=self.box.bottom_right, after_sleep=2, raise_if_not_found=True)
+                    self.wait_click_ocr(
+                        match="开始作战", box=self.box.bottom_right, after_sleep=2, raise_if_not_found=True
+                    )
                     self.choose_chenyan(tickets)
                     self.sleep(2)
                     continue
@@ -365,14 +369,23 @@ class DailyBattleMixin:
 
     def _outpost_slot_count(self, support_slot=False):
         """阵容格子里有人时格子底下显示战力数字。support_slot=False 时最右格不算（开助战时它是助战格）。"""
-        area = (OUTPOST_OWN_SLOTS[0], OUTPOST_OWN_SLOTS[1], OUTPOST_SUPPORT_SLOT[2], OUTPOST_SUPPORT_SLOT[3]) if support_slot else OUTPOST_OWN_SLOTS
+        area = (
+            (OUTPOST_OWN_SLOTS[0], OUTPOST_OWN_SLOTS[1], OUTPOST_SUPPORT_SLOT[2], OUTPOST_SUPPORT_SLOT[3])
+            if support_slot
+            else OUTPOST_OWN_SLOTS
+        )
         return len(self.ocr(box=self.box_of_screen(*area), match=power_re))
 
     def _outpost_fill_top_power(self, slots):
         """先撤掉阵容里已有的人，再按卡片底下的战力从高到低点，点了没上场（如今天已出战）就换下一个。"""
         # 关助战时 5 格都是我方；开助战时最右格是助战，清空只清我方格
-        slot_box = self.box_of_screen(*(OUTPOST_OWN_SLOTS if slots == 4 else (
-            OUTPOST_OWN_SLOTS[0], OUTPOST_OWN_SLOTS[1], OUTPOST_SUPPORT_SLOT[2], OUTPOST_SUPPORT_SLOT[3])))
+        slot_box = self.box_of_screen(
+            *(
+                OUTPOST_OWN_SLOTS
+                if slots == 4
+                else (OUTPOST_OWN_SLOTS[0], OUTPOST_OWN_SLOTS[1], OUTPOST_SUPPORT_SLOT[2], OUTPOST_SUPPORT_SLOT[3])
+            )
+        )
         for _ in range(6):
             filled = self.ocr(box=slot_box, match=power_re)
             if not filled:
@@ -396,7 +409,7 @@ class DailyBattleMixin:
         """「本次作战使用班组人形助战」开关：开是橙色勾（饱和度高），关是灰底叉。"""
         self.next_frame()
         h, w = self.frame.shape[:2]
-        region = self.frame[int(0.625 * h):int(0.66 * h), int(0.912 * w):int(0.938 * w)]
+        region = self.frame[int(0.625 * h) : int(0.66 * h), int(0.912 * w) : int(0.938 * w)]
         sat = float(cv2.cvtColor(region, cv2.COLOR_BGR2HSV)[..., 1].mean())
         return sat > 100
 
@@ -416,8 +429,9 @@ class DailyBattleMixin:
         if borrowed := self.ocr(box=self.box_of_screen(*OUTPOST_SUPPORT_SLOT), match=power_re):
             self.log_info(f"助战格已有人形（战力 {borrowed[0].name}），沿用")
             return True
-        if not self.wait_click_ocr(match=re.compile("^助战$"), box=self.box_of_screen(0.85, 0.79, 0.97, 0.87),
-                                   time_out=3, after_sleep=1.5):
+        if not self.wait_click_ocr(
+            match=re.compile("^助战$"), box=self.box_of_screen(0.85, 0.79, 0.97, 0.87), time_out=3, after_sleep=1.5
+        ):
             self.log_info("没找到「助战」按钮，不借助战")
             return False
         popup_title = self.box_of_screen(0.4, 0.14, 0.6, 0.22)
@@ -429,8 +443,12 @@ class DailyBattleMixin:
         for card in cards[:3]:
             # 点头像会打开人形详情，点战力数字（卡片正文）才是选中
             self.click_box(card, after_sleep=1)
-            self.wait_click_ocr(match=re.compile("^(入队|确认)$"), box=self.box_of_screen(0.62, 0.74, 0.83, 0.84),
-                                time_out=2, after_sleep=1.5)
+            self.wait_click_ocr(
+                match=re.compile("^(入队|确认)$"),
+                box=self.box_of_screen(0.62, 0.74, 0.83, 0.84),
+                time_out=2,
+                after_sleep=1.5,
+            )
             self.next_frame()
             if not self.ocr(match="班组助战", box=popup_title):
                 self.log_info(f"前哨战借班组助战：战力 {power_of(card)}", notify=True)

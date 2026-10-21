@@ -12,7 +12,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 try:
-    import ok.util.config  # noqa: F401
+    import ok.util.config
 except ImportError:  # mac 上没装 ok 框架：只需要 ConfigOption 这个壳
     ok = types.ModuleType("ok")
     util = types.ModuleType("ok.util")
@@ -43,7 +43,13 @@ class PlanTest(unittest.TestCase):
         state = LineupState(
             4,
             4,
-            own=[own("威玛西娜", 4522, True), own("春田", 3224, True), own("贝丝蒂", 3207, True), own("琼玖", 5409), own("罗蕾莱", 1408)],
+            own=[
+                own("威玛西娜", 4522, True),
+                own("春田", 3224, True),
+                own("贝丝蒂", 3207, True),
+                own("琼玖", 5409),
+                own("罗蕾莱", 1408),
+            ],
             supports_on_map=[sup("翡图萨")],
         )
         steps = plan_lineup(state, Unit("威玛西娜", 24871, support=True))
@@ -55,8 +61,21 @@ class PlanTest(unittest.TestCase):
         self.assertFalse(steps[3].unit.support)
 
     def test_same_name_only(self):
-        state = LineupState(4, 4, own=[own("威玛西娜", 4522, True), own("春田", 3224, True), own("贝丝蒂", 3207, True), own("琼玖", 5409, True), own("罗蕾莱", 1408)])
-        self.assertEqual(actions(plan_lineup(state, Unit("威玛西娜", 1, support=True))), [("withdraw", "威玛西娜"), ("deploy", "威玛西娜")])
+        state = LineupState(
+            4,
+            4,
+            own=[
+                own("威玛西娜", 4522, True),
+                own("春田", 3224, True),
+                own("贝丝蒂", 3207, True),
+                own("琼玖", 5409, True),
+                own("罗蕾莱", 1408),
+            ],
+        )
+        self.assertEqual(
+            actions(plan_lineup(state, Unit("威玛西娜", 1, support=True))),
+            [("withdraw", "威玛西娜"), ("deploy", "威玛西娜")],
+        )
 
     def test_full_without_conflict_drops_weakest(self):
         state = LineupState(3, 3, own=[own("A", 900, True), own("B", 500, True), own("C", 700, True), own("D", 800)])
@@ -67,7 +86,9 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(actions(plan_lineup(state, Unit("X", 1, support=True))), [("deploy", "X"), ("deploy", "D")])
 
     def test_support_already_there_only_fills(self):
-        state = LineupState(4, 3, own=[own("A", 900, True), own("B", 500, True), own("C", 700)], supports_on_map=[sup("威玛西娜")])
+        state = LineupState(
+            4, 3, own=[own("A", 900, True), own("B", 500, True), own("C", 700)], supports_on_map=[sup("威玛西娜")]
+        )
         self.assertEqual(actions(plan_lineup(state, Unit("威玛西娜", 1, support=True))), [("deploy", "C")])
 
     def test_done(self):
@@ -79,11 +100,16 @@ class PlanTest(unittest.TestCase):
         state = LineupState(3, 1, own=[own("A", 900, True), own("威玛西娜", 950), own("C", 700), own("D", 600)])
         support = Unit("威玛西娜", 1, support=True)
         self.assertEqual(actions(plan_lineup(state, support)), [("deploy", "威玛西娜"), ("deploy", "C")])
-        self.assertEqual(actions(plan_lineup(state, None, exclude={("威玛西娜", 950)})), [("deploy", "C"), ("deploy", "D")])
+        self.assertEqual(
+            actions(plan_lineup(state, None, exclude={("威玛西娜", 950)})), [("deploy", "C"), ("deploy", "D")]
+        )
 
     def test_unknown_capacity_does_not_fill_blindly(self):
         state = LineupState(None, None, own=[own("威玛西娜", 4522, True), own("C", 700)])
-        self.assertEqual(actions(plan_lineup(state, Unit("威玛西娜", 1, support=True))), [("withdraw", "威玛西娜"), ("deploy", "威玛西娜")])
+        self.assertEqual(
+            actions(plan_lineup(state, Unit("威玛西娜", 1, support=True))),
+            [("withdraw", "威玛西娜"), ("deploy", "威玛西娜")],
+        )
 
 
 def box(name, x, y, w=60, h=30):
@@ -93,7 +119,13 @@ def box(name, x, y, w=60, h=30):
 class CountTest(unittest.TestCase):
     def test_objective_counter_is_ignored(self):
         """实录：关卡目标「使用刀的人形 1/3」就在计数下面一行。"""
-        boxes = [box("部署人形", 975, 50, 130), box("4/4", 1190, 50), box("作战效能", 1290, 50), box("使用刀的人形卫三二四", 975, 125, 250), box("1/3", 1490, 125)]
+        boxes = [
+            box("部署人形", 975, 50, 130),
+            box("4/4", 1190, 50),
+            box("作战效能", 1290, 50),
+            box("使用刀的人形卫三二四", 975, 125, 250),
+            box("1/3", 1490, 125),
+        ]
         self.assertEqual(deploy_count_from_boxes(boxes), (4, 4))
 
     def test_only_objective_counter_reads_nothing(self):
@@ -154,7 +186,9 @@ class FakeScreen(LineupMixin):
         supports = [Unit(name, 0, deployed=True, support=True) for name, s in self.on_map if s] if need_map else []
         known = self._borrowed_support or (want.name if want is not None and want.deployed else None)
         if self.map_blind:
-            supports = [Unit(known, 0, deployed=True, support=True)] if known and (n is None or n - len(own_on) == 1) else []
+            supports = (
+                [Unit(known, 0, deployed=True, support=True)] if known and (n is None or n - len(own_on) == 1) else []
+            )
         return LineupState(None if n is None else self.cap, n, units, supports)
 
     def _withdraw(self, step):
@@ -187,20 +221,35 @@ class ReconcileTest(unittest.TestCase):
         self.assertCountEqual(s.on_map, [("春田", False), ("贝丝蒂", False), ("威玛西娜", True), ("琼玖", False)])
 
     def test_withdraw_fails_once_then_next_round_fixes(self):
-        s = FakeScreen(4, OWN, [("春田", False), ("贝丝蒂", False), ("威玛西娜", False), ("翡图萨", True)], fail=[("withdraw", "威玛西娜")])
+        s = FakeScreen(
+            4,
+            OWN,
+            [("春田", False), ("贝丝蒂", False), ("威玛西娜", False), ("翡图萨", True)],
+            fail=[("withdraw", "威玛西娜")],
+        )
         self.assertTrue(s.reconcile_lineup(WANT))
         self.assertIn(("威玛西娜", True), s.on_map)
         self.assertNotIn(("威玛西娜", False), s.on_map)
         self.assertEqual(len(s.on_map), 4)
 
     def test_own_card_fails_next_strongest_fills(self):
-        s = FakeScreen(4, OWN, [("春田", False), ("贝丝蒂", False), ("威玛西娜", False)], fail=[("deploy", "琼玖"), ("deploy", "琼玖")])
+        s = FakeScreen(
+            4,
+            OWN,
+            [("春田", False), ("贝丝蒂", False), ("威玛西娜", False)],
+            fail=[("deploy", "琼玖"), ("deploy", "琼玖")],
+        )
         self.assertTrue(s.reconcile_lineup(WANT))
         self.assertIn(("罗蕾莱", False), s.on_map)
         self.assertIn(("威玛西娜", True), s.on_map)
 
     def test_support_cannot_be_placed_refills_own(self):
-        s = FakeScreen(4, OWN, [("春田", False), ("贝丝蒂", False), ("威玛西娜", False), ("琼玖", False)], fail=[("deploy", "威玛西娜")] * 3)
+        s = FakeScreen(
+            4,
+            OWN,
+            [("春田", False), ("贝丝蒂", False), ("威玛西娜", False), ("琼玖", False)],
+            fail=[("deploy", "威玛西娜")] * 3,
+        )
         self.assertTrue(s.reconcile_lineup(WANT))
         self.assertEqual(len(s.on_map), 4)
         self.assertFalse(any(sup_ for _, sup_ in s.on_map))

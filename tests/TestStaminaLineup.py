@@ -53,7 +53,9 @@ class TestStaminaPopup(unittest.TestCase):
         self.assertTrue(has_forbidden_restore_text(["购买", "确认"]))
         self.assertFalse(has_forbidden_restore_text(["快速取出调度室储存情报拼图", "取出数量 0", "确认", "取消"]))
         # 实录：第二页签是接入密钥，是正常体力道具，不能被「兑换」两个字误伤
-        self.assertFalse(has_forbidden_restore_text(["消耗接入密钥兑换", "消耗1接入密钥，获得60情报拼图", "取消", "确认"]))
+        self.assertFalse(
+            has_forbidden_restore_text(["消耗接入密钥兑换", "消耗1接入密钥，获得60情报拼图", "取消", "确认"])
+        )
 
     def test_popup_texts_excludes_background(self):
         boxes = [
@@ -73,14 +75,22 @@ class TestStaminaPopup(unittest.TestCase):
 
     def test_stamina_value(self):
         # 实录：接入密钥兑换后弹窗还开着，右上角 9/240 变成 69/240，靠这个数判断成功
-        boxes = [Box(1085, 22, 46, 18, name="9/240"), Box(600, 345, 28, 16, name="136"), Box(730, 530, 40, 20, name="确认")]
+        boxes = [
+            Box(1085, 22, 46, 18, name="9/240"),
+            Box(600, 345, 28, 16, name="136"),
+            Box(730, 530, 40, 20, name="确认"),
+        ]
         self.assertEqual(stamina_value(boxes, self.h), 9)
         self.assertEqual(stamina_value([Box(1085, 22, 50, 18, name="69 /240")], self.h), 69)
         self.assertIsNone(stamina_value([Box(1085, 400, 46, 18, name="9/240")], self.h))  # 不在顶部
         self.assertIsNone(stamina_value([Box(1085, 22, 46, 18, name="确认")], self.h))
 
     def test_tab_count(self):
-        boxes = [Box(600, 345, 28, 16, name="121"), Box(720, 345, 36, 16, name="6140"), Box(1140, 70, 50, 20, name="6140")]
+        boxes = [
+            Box(600, 345, 28, 16, name="121"),
+            Box(720, 345, 36, 16, name="6140"),
+            Box(1140, 70, 50, 20, name="6140"),
+        ]
         self.assertEqual(tab_count(boxes, 612, 323, self.h), 121)
         self.assertEqual(tab_count(boxes, 738, 323, self.h), 6140)
         self.assertIsNone(tab_count(boxes, 488, 323, self.h))
@@ -138,7 +148,6 @@ class TestZilvLocked(unittest.TestCase):
 
     def test_real_screenshot(self):
         import cv2
-
         from ok import Box
 
         from src.core.BaseGfTask import region_mean_gray, zilv_locked
@@ -170,8 +179,10 @@ class TestSupportSelect(unittest.TestCase):
     def test_find_cards_sorted_with_badge_reader(self):
         badges = {"25871": 6, "17405": 0, "17342": 1, "16083": 4, "5274": 1, "2830": None}
         cards = find_cards(self.boxes(), self.W, self.H, badge_of=lambda b: badges[b.name])
-        self.assertEqual([(c["power"], c["badge"]) for c in cards],
-                         [(25871, 6), (17405, 0), (17342, 1), (16083, 4), (5274, 1), (2830, None)])
+        self.assertEqual(
+            [(c["power"], c["badge"]) for c in cards],
+            [(25871, 6), (17405, 0), (17342, 1), (16083, 4), (5274, 1), (2830, None)],
+        )
         c6 = cards[0]
         self.assertAlmostEqual(c6["center"][0], 1033, delta=3)
         self.assertAlmostEqual(c6["center"][1], 198 - 0.065 * self.H, delta=3)
@@ -225,7 +236,10 @@ class TestSupportSelect(unittest.TestCase):
         from src.core.support_select import AvatarBook, identify_cards
 
         frame = cv2.imread(str(self.FIXTURE))
-        cards = [{"power_box": Box(x, y, 40, 16, name="1")} for x, y in [(1015, 190), (1108, 190), (1195, 190), (1015, 302), (1108, 302), (1195, 302)]]
+        cards = [
+            {"power_box": Box(x, y, 40, 16, name="1")}
+            for x, y in [(1015, 190), (1108, 190), (1195, 190), (1015, 302), (1108, 302), (1195, 302)]
+        ]
         identify_cards(frame, cards, 1280, 768, AvatarBook())
         self.assertEqual([c["name"] for c in cards], ["威玛西娜"] * 5 + [None])
         self.assertEqual(cards[0]["avatar"].shape, (54, 52, 3))
@@ -264,7 +278,10 @@ class TestSupportSelect(unittest.TestCase):
         good = [t for t in tiles if t["fill"] >= TILE_EMPTY_FILL]
         self.assertEqual(len(good), 4, tiles)
         for want in [(721, 492), (650, 553), (849, 397), (789, 443)]:
-            self.assertTrue(any(abs(t["center"][0] - want[0]) <= 12 and abs(t["center"][1] - want[1]) <= 12 for t in good), (want, tiles))
+            self.assertTrue(
+                any(abs(t["center"][0] - want[0]) <= 12 and abs(t["center"][1] - want[1]) <= 12 for t in good),
+                (want, tiles),
+            )
 
         one = cv2.imread(str(self.FIXTURE.parent / "deploy_one_empty_1280x768.jpg"))
         tiles = find_deploy_tiles(one, 1280, 768)
@@ -272,7 +289,9 @@ class TestSupportSelect(unittest.TestCase):
         self.assertLessEqual(abs(tiles[0]["center"][1] - 491), 12, tiles)
         self.assertGreaterEqual(tiles[0]["fill"], 0.95)
         x, y = far_point(tiles, 1280, 768)
-        self.assertTrue(all(((x * 1280 - t["center"][0]) ** 2 + (y * 768 - t["center"][1]) ** 2) ** 0.5 > 150 for t in tiles))
+        self.assertTrue(
+            all(((x * 1280 - t["center"][0]) ** 2 + (y * 768 - t["center"][1]) ** 2) ** 0.5 > 150 for t in tiles)
+        )
 
     def test_find_unit_tags(self):
         import cv2

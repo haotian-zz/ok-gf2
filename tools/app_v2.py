@@ -15,7 +15,7 @@ import sys
 import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from serve_web_v2 import build_app  # noqa: E402
+from serve_web_v2 import build_app
 
 WINDOW_TITLE = "少前2 自动化"
 

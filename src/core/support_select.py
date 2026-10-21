@@ -129,7 +129,9 @@ def find_badge_disk(frame, x, y, scale=1.0):
     hsv = cv2.cvtColor(win, cv2.COLOR_BGR2HSV)
     lo, hi = 9 * scale, 18 * scale
     for s_min, v_min in BADGE_DISK_COLORS:
-        blue = ((hsv[..., 0] > 85) & (hsv[..., 0] < 110) & (hsv[..., 1] > s_min) & (hsv[..., 2] > v_min)).astype(np.uint8)
+        blue = ((hsv[..., 0] > 85) & (hsv[..., 0] < 110) & (hsv[..., 1] > s_min) & (hsv[..., 2] > v_min)).astype(
+            np.uint8
+        )
         blue = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
         n, _, stats, cents = cv2.connectedComponentsWithStats(blue)
         best = None
@@ -237,7 +239,12 @@ def find_tiles(frame, width, height, strict=False):
     if frame is None:
         return []
     lo, hi = TILE_STRICT if strict else TILE_LOOSE
-    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    x0, y0, x1, y1 = (
+        int(MAP_BOX[0] * width),
+        int(MAP_BOX[1] * height),
+        int(MAP_BOX[2] * width),
+        int(MAP_BOX[3] * height),
+    )
     region = frame[y0:y1, x0:x1]
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     # 地格之间是白色细边（饱和度很低），不做闭运算，否则相邻地格会连成一块
@@ -262,7 +269,9 @@ def merge_tiles(primary, secondary, min_dist=40):
     """primary 在前，secondary 里离 primary 任一中心不足 min_dist 的去重。"""
     out = list(primary)
     for t in secondary:
-        if all((t["center"][0] - o["center"][0]) ** 2 + (t["center"][1] - o["center"][1]) ** 2 >= min_dist**2 for o in out):
+        if all(
+            (t["center"][0] - o["center"][0]) ** 2 + (t["center"][1] - o["center"][1]) ** 2 >= min_dist**2 for o in out
+        ):
             out.append(t)
     return out
 
@@ -451,7 +460,12 @@ def find_deploy_tiles(frame, width, height, max_n=12):
     if frame is None:
         return []
     s = height / 768
-    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    x0, y0, x1, y1 = (
+        int(MAP_BOX[0] * width),
+        int(MAP_BOX[1] * height),
+        int(MAP_BOX[2] * width),
+        int(MAP_BOX[3] * height),
+    )
     hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, TILE_HSV[0], TILE_HSV[1]).astype(np.float32) / 255
     kw, kh = int(TILE_KERNEL[0] * s), int(TILE_KERNEL[1] * s)
@@ -468,7 +482,13 @@ def find_deploy_tiles(frame, width, height, max_n=12):
         x, y = loc[0] + kw // 2, loc[1] + kh // 2
         out.append({"center": (x0 + x, y0 + y), "score": round(float(mx), 2), "fill": round(float(fill[y, x]), 2)})
         # 相邻地格中心相距约 (kw/2, kh/2)，压制范围要比这小
-        cv2.rectangle(res, (loc[0] - int(kw * 0.45), loc[1] - int(kh * 0.45)), (loc[0] + int(kw * 0.45), loc[1] + int(kh * 0.45)), 0, -1)
+        cv2.rectangle(
+            res,
+            (loc[0] - int(kw * 0.45), loc[1] - int(kh * 0.45)),
+            (loc[0] + int(kw * 0.45), loc[1] + int(kh * 0.45)),
+            0,
+            -1,
+        )
     out.sort(key=lambda t: -t["fill"])
     return out
 
@@ -477,7 +497,9 @@ def far_point(tiles, width, height, candidates=((0.45, 0.30), (0.30, 0.50), (0.6
     """地图上离所有地格都远的一个点（相对坐标），用来点一下取消选中。"""
     best, best_d = candidates[0], -1
     for cx, cy in candidates:
-        d = min([((cx * width - t["center"][0]) ** 2 + (cy * height - t["center"][1]) ** 2) ** 0.5 for t in tiles] or [1e9])
+        d = min(
+            [((cx * width - t["center"][0]) ** 2 + (cy * height - t["center"][1]) ** 2) ** 0.5 for t in tiles] or [1e9]
+        )
         if d > best_d:
             best, best_d = (cx, cy), d
     return best
@@ -501,7 +523,12 @@ def find_unit_tags(frame, width, height, max_n=8):
     if frame is None:
         return []
     s = height / 768
-    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    x0, y0, x1, y1 = (
+        int(MAP_BOX[0] * width),
+        int(MAP_BOX[1] * height),
+        int(MAP_BOX[2] * width),
+        int(MAP_BOX[3] * height),
+    )
     region = frame[y0:y1, x0:x1]
     g8 = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
     gray = g8.astype(np.float32)
@@ -518,7 +545,13 @@ def find_unit_tags(frame, width, height, max_n=8):
         mask[c - q : c + q + 1, c - q : c + q + 1] = 0  # 数字区域不参与比较
         res = np.nan_to_num(cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED, mask=mask), nan=0, posinf=0, neginf=0)
         res = cv2.copyMakeBorder(
-            res, n // 2, gray.shape[0] - res.shape[0] - n // 2, n // 2, gray.shape[1] - res.shape[1] - n // 2, cv2.BORDER_CONSTANT, value=0
+            res,
+            n // 2,
+            gray.shape[0] - res.shape[0] - n // 2,
+            n // 2,
+            gray.shape[1] - res.shape[1] - n // 2,
+            cv2.BORDER_CONSTANT,
+            value=0,
         )
         if best is None:
             best, sizes = res, np.full(res.shape, n, np.int32)
@@ -614,7 +647,12 @@ def find_tutorial_tile(frame, width, height):
     if frame is None:
         return None
     s = height / 768
-    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    x0, y0, x1, y1 = (
+        int(MAP_BOX[0] * width),
+        int(MAP_BOX[1] * height),
+        int(MAP_BOX[2] * width),
+        int(MAP_BOX[3] * height),
+    )
     hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
     mask = None
     for lo, hi in TUTORIAL_TILE_HSV:
@@ -698,7 +736,12 @@ def freed_tile(before, after, width, height):
     """
     if before is None or after is None or before.shape != after.shape:
         return None
-    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    x0, y0, x1, y1 = (
+        int(MAP_BOX[0] * width),
+        int(MAP_BOX[1] * height),
+        int(MAP_BOX[2] * width),
+        int(MAP_BOX[3] * height),
+    )
     a = cv2.cvtColor(before[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
     b = cv2.cvtColor(after[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
     diff = (cv2.absdiff(a, b) > FREED_DIFF).astype(np.uint8)
