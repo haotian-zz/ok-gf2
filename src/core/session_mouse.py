@@ -1,16 +1,15 @@
 """
 Interception 会话鼠标：在 RDP 会话里产生「内核级真实鼠标输入」，游戏分不出它和人手。
 
-背景（实录 2026-10-20）：ok-gf2 和游戏一起跑在 win4090 的独立 RDP 会话 gf2 里。原来的 PostMessage 输入
+背景（实录 2026-10-20）：ok-gf2 和游戏一起跑在一个独立的 RDP 会话里。原来的 PostMessage 输入
 过不了新手引导（引导高亮的目标只认真实输入，第 9 章「支援单位」引导把推图卡死），游戏被激活后还会把
-PostMessage 的点击落到真实光标处。NIKKE 会话里已经验证过：借已装好的 Interception 驱动
+PostMessage 的点击落到真实光标处。做法是借用户自己装好的 Interception 驱动
 （System32\\drivers\\keyboard.sys / mouse.sys），往「本会话自己的 RDP 鼠标设备」写绝对坐标报告，
 RDP 窗口最小化也能点，而且只动本会话的光标，控制台鼠标不受影响。
 
 协议：https://github.com/oblitum/Interception/blob/master/library/interception.c
 只有硬件 ID 为 TS_INPT\\TS_MOU 的设备（RDP 鼠标）会被用到；用一条无位移无按键的 RAWINPUT 标记找出
 「哪台设备属于本会话」，设备号不写死、识别不到就明确报错，绝不往别的桌面乱点。
-从 NIKKEAutoScript 的 module/device/win/virtual_mouse/rdp_mouse.py 移植，去掉了那边的依赖。
 """
 
 import ctypes

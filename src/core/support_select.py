@@ -34,7 +34,7 @@ BADGE_SIZE = 13  # 模板尺寸
 BADGE_MIN_IOU = 0.6
 BADGE_DIR = os.path.join("assets", "support_badges")
 # 蓝圈颜色 (S 下限, V 下限)：先按 1280x768 实测的亮蓝找，找不到再放宽
-# （实录 2026-10-20：gf2 会话 2560x1440 下蓝圈是暗青色，V 只有 120~160）
+# （实录 2026-10-20：RDP 会话 2560x1440 下蓝圈是暗青色，V 只有 120~160）
 BADGE_DISK_COLORS = ((25, 170), (60, 100))
 BADGE_OCR_WHITE = 170  # OCR 前二值化：三通道都高于它算数字笔画
 BADGE_OCR_MIN_CONF = 0.5
