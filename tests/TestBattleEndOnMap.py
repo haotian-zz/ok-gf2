@@ -93,6 +93,27 @@ class SkipDialogsOnMapTest(unittest.TestCase):
         skip_dialogs(task, end_match=["任务完成"], time_out=0.01, has_dialog=True, raise_if_not_found=False)
         task.click_relative.assert_called()
 
+    def test_loading_screen_extends_timeout(self):
+        """实录 2026-10-21：回地图的「资源加载中 30%」比 time_out 还久，加载页要顺延超时，不能判卡住。"""
+        start = ns["time"].time()
+        loading = [box("11.008625-4431-226"), box("30%"), box("资源加载中")]
+        task = self.make_task([])
+        task.ocr.side_effect = lambda *a, **k: loading if ns["time"].time() - start < 0.3 else [box("VS-1-10"), box("普通")]
+        task._is_loading_frame.side_effect = lambda boxes: boxes is loading
+        task.sleep.side_effect = lambda s: ns["time"].sleep(0.02)
+        result = skip_dialogs(task, end_match=[map_re], time_out=0.05, has_dialog=True, raise_if_not_found=True)
+        self.assertEqual([b.name for b in result], ["VS-1-10"])
+        task.click_relative.assert_not_called()
+
+    def test_loading_grace_is_bounded(self):
+        task = self.make_task([box("资源加载中"), box("30%")])
+        task._is_loading_frame.return_value = True
+        start = ns["time"].time()
+        self.assertIsNone(
+            skip_dialogs(task, end_match=[map_re], time_out=0.05, loading_grace=0.1, has_dialog=True, raise_if_not_found=False)
+        )
+        self.assertLess(ns["time"].time() - start, 1)
+
     def test_map_in_end_match_returns_map_boxes(self):
         task = self.make_task([box("9-7"), box("普通")])
         result = skip_dialogs(task, end_match=["任务完成", map_re], time_out=1, has_dialog=True, raise_if_not_found=False)
