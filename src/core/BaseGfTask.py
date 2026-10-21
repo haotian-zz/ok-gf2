@@ -61,7 +61,8 @@ from src.image.hsv_config import HSVRange as hR
 from src.interaction.ScreenPosition import ScreenPosition
 
 logger = Logger.get_logger(__name__)
-pop_ups = ["点击空白处关闭", "点击屏幕任意位置继续", "点击任意位置继续", "新周期开启", "周期已重置"]
+# 「物品详情」：实录 2026-10-20，真实输入下 skip_dialogs 点右上角会按到选关页面的货币「+」，弹出道具说明，ESC 关掉
+pop_ups = ["点击空白处关闭", "点击屏幕任意位置继续", "点击任意位置继续", "新周期开启", "周期已重置", "物品详情"]
 number_re = re.compile(r"^\d+$")
 stamina_re = re.compile(r"^\d+/\d+")
 # 关卡名：可选的字母前缀（SL-/BH-/今后其他组合）+ 章-关，如 3-1、SL-3-2、BH-3-4
@@ -190,6 +191,11 @@ def parse_time_option(option: str) -> list[float]:
     例如 "1.087-1.4-0.5" -> [1.087, 1.4, 0.5]
     """
     return [float(x) for x in option.split("-")]
+
+
+def battle_over_on_map(results):
+    """等结算时等到的是选关页面的关卡名：战斗已经结束（结算页被点过去了），不用再点任何东西。"""
+    return bool(results) and any(map_re.match(r.name) for r in results)
 
 
 def parse_deploy_count(text):
@@ -525,7 +531,10 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 if self._is_battle_frame(boxes) or self._is_loading_frame(boxes):
                     # 游戏在打/在加载，不算卡住，喂一下看门狗
                     self._touch_progress()
-                if has_dialog and not self._is_loading_frame(boxes) and not self._is_battle_frame(boxes):
+                if has_dialog and self.find_boxes(boxes, match=map_re):
+                    # 实录 2026-10-20：选关页面右上角是货币和「+」，真实输入下乱点会弹出「物品详情」，这里什么都别点
+                    pass
+                elif has_dialog and not self._is_loading_frame(boxes) and not self._is_battle_frame(boxes):
                     # 剧情跳过标签在 (0.95, 0.04)，教学弹窗的关闭 X 在 (0.967, 0.042)，交替点两处
                     if attempts % 2 == 0:
                         self.click_relative(0.95, 0.04)
@@ -1584,10 +1593,14 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
         clicked_continue = False
         while results := self.skip_dialogs(
-            end_match=["任务完成", "任务失败", "战斗失败", "对战胜利", "对战失败", "确认", "确认结算", "继续前进"],
+            # 实录 2026-10-20：真实输入下角落点击会把结算页点过去，等到的直接是选关页面，也算打完了
+            end_match=["任务完成", "任务失败", "战斗失败", "对战胜利", "对战失败", "确认", "确认结算", "继续前进", map_re],
             time_out=900,
             has_dialog=has_dialog,
         ):
+            if battle_over_on_map(results):
+                self.log_info("结算页已经过去，回到了选关页面", notify=False)
+                break
             # 优先遍历所有结果找"继续前进"
             clicked = False
             if any(r.name != "继续前进" for r in results):
