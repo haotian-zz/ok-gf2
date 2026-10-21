@@ -86,7 +86,7 @@ class FixtureTest(unittest.TestCase):
 source = ROOT / "src/core/BaseGfTask.py"
 tree = ast.parse(source.read_text(encoding="utf-8"))
 cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "BaseGfTask")
-wanted = ("_support_count", "_support_button", "_click_support_tab", "_ensure_unit_tab", "_support_cards", "_click_support_card", "_follow_support_tutorial", "deploy_supports")
+wanted = ("_support_count", "_support_button", "_click_support_tab", "_ensure_unit_tab", "_support_cards", "_support_card_placed", "_click_support_card", "_follow_support_tutorial", "deploy_supports")
 methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
 ns = {
     "re": re,
