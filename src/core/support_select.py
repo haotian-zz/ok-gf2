@@ -622,3 +622,14 @@ def support_card_points(lv_boxes, width, height):
         )
     cards.sort(key=lambda c: (round(c["center"][1] / (0.05 * height)), c["center"][0]))
     return cards
+
+
+def support_point_candidates(frame, width, height):
+    """
+    支援点候选，按先后顺序试点：菱形模板认出来的地格在前，宽松蓝色连通域兜底在后（按饱和度从高到低）。
+    实录 2026-10-20 9-7：支援点是一格亮蓝色、中间圆形图标、还被敌人血条压着一角，菱形模板认不出，
+    宽松连通域能找到（顺带会多一块蓝色水面，点了按钮不变就跳过，无害）。
+    """
+    primary = find_deploy_tiles(frame, width, height)
+    loose = sorted(find_tiles(frame, width, height), key=lambda t: -t.get("sat", 0))
+    return [t["center"] for t in merge_tiles(primary, loose, min_dist=0.03 * height)]

@@ -38,6 +38,7 @@ from src.core.support_select import (
     support_card_points,
     SUPPORT_COUNT_BOX,
     support_lv_re,
+    support_point_candidates,
     SUPPORT_TAB_BOX,
     SUPPORT_TAB_XY,
     TAB_BOX,
@@ -1300,9 +1301,9 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             card = free[0]
             self._click_support_card(card)
             tiles = [
-                t["center"]
-                for t in find_deploy_tiles(self.frame, self.width, self.height)
-                if all((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 >= min_gap for x, y in tried)
+                c
+                for c in support_point_candidates(self.frame, self.width, self.height)
+                if all((c[0] - x) ** 2 + (c[1] - y) ** 2 >= min_gap for x, y in tried)
             ]
             self.debug_shot("support_tiles")
             if not tiles:

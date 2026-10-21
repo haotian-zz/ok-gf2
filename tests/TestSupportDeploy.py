@@ -76,6 +76,12 @@ class FixtureTest(unittest.TestCase):
         flags = [ss.is_orange_check(frame, *c["check"]) for c in cards]
         self.assertEqual(flags, [True, False, False])
 
+    def test_round_icon_support_point_found_as_fallback(self):
+        # 实录 9-7：亮蓝色圆形图标的支援点，菱形模板认不出，靠宽松连通域兜底
+        frame = cv2.imread(str(FIX / "support_round_icon_1280x720.jpg"))
+        pts = ss.support_point_candidates(frame, 1280, 720)
+        self.assertTrue(any(abs(x - 877) < 30 and abs(y - 546) < 30 for x, y in pts), pts)
+
     def test_support_tiles_found_in_support_tab(self):
         frame = cv2.imread(str(FIX / "support_tab_deployed_1280x720.jpg"))
         tiles = ss.find_deploy_tiles(frame, 1280, 720)
@@ -104,6 +110,7 @@ ns = {
     "find_tutorial_tile": lambda frame, w, h: frame.get("tutorial_tile") if isinstance(frame, dict) else None,
     "is_orange_check": lambda frame, x, y: (x, y) in frame.get("checks", ()),
     "find_deploy_tiles": lambda frame, w, h: [{"center": c, "fill": 0.9} for c in frame.get("tiles", ())],
+    "support_point_candidates": lambda frame, w, h: list(frame.get("tiles", ())),
 }
 exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), "exec"), ns)
 
