@@ -494,6 +494,7 @@ class ClearMapTask(BaseGfTask):
                 misses += 1
                 if misses >= 2:
                     self.debug_shot("hero_dialog")
+                    self.back(after_sleep=1.5)  # 关掉窗口再报错，下次启动不会停在窗口上
                     raise Exception("英雄难度窗口里没读到「开启中 / 未开启」")
                 continue
             on = "开启中" in state[0].name
@@ -504,6 +505,7 @@ class ClearMapTask(BaseGfTask):
             x = s.x + s.width / 2 + HERO_SWITCH_DX * self.height
             self.click_relative(x / self.width, (s.y + s.height / 2) / self.height, after_sleep=1.5)
         if on != want:
+            self.back(after_sleep=1.5)
             raise Exception(f"英雄难度没能{'打开' if want else '关掉'}")
         self.debug_shot("hero_dialog")
         # 关窗口：ESC。窗口不在时 ESC 会退回章节选择页，所以确认窗口还在才按
