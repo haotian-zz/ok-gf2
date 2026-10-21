@@ -118,6 +118,7 @@ class FakeTask:
         self.config = {}
         for name in wanted:
             setattr(self, name, ns[name].__get__(self))
+        self.next_frame()
 
     # ---- 画面
     def next_frame(self):
