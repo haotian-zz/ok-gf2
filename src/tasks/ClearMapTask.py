@@ -500,13 +500,24 @@ class ClearMapTask(BaseGfTask):
         return on
 
     # ------------------------------------------------------------------ 持续推进
+    def on_chapter_select(self):
+        """
+        当前是不是章节选择页：右下有「章节进度」，或者顶上有作战页签、右下有「普通 / 困难」切换。
+        实录 2026-10-21 8.7 章：「章节进度」叠在立绘上 OCR 读不出，旧逻辑以为不在章节选择页，连按 ESC 退到了「战役推进」。
+        """
+        if self.ocr(match=chapter_select_words, box="bottom_right"):
+            return True
+        return bool(self.ocr(box="top", match=nav_tabs_re)) and bool(
+            self.ocr(box="bottom_right", match=difficulty_re)
+        )
+
     def open_chapter_select(self):
         """从章节地图按 ESC 回到章节选择页。"""
         for _ in range(3):
-            if self.wait_ocr(match=chapter_select_words, box="bottom_right", time_out=3, raise_if_not_found=False):
+            if self.wait_until(self.on_chapter_select, time_out=3, raise_if_not_found=False):
                 return True
             self.back(after_sleep=2)
-        return bool(self.ocr(match=chapter_select_words, box="bottom_right"))
+        return self.on_chapter_select()
 
     def chapter_percent(self):
         """回章节选择页读当前章节的完成度百分比（不进下一章，停在章节选择页）。"""
@@ -523,13 +534,13 @@ class ClearMapTask(BaseGfTask):
         打完 / 看完一关后游戏退回了章节选择页：点「确认」进回选中的章节。返回是否进去了。
         停在「模拟作战 / 往期活动 / 补给作战」页签时先点「剧情战役」页签回到章节选择页。
         """
-        if not self.ocr(match=chapter_select_words, box="bottom_right"):
+        if not self.on_chapter_select():
             tab = self.ocr(box="top", match=re.compile(r"^剧情战役$"))
             if not tab:
                 return False
             self.log_info("停在作战的其他页签上，切回「剧情战役」", notify=True)
             self.click(tab, after_sleep=2)
-            if not self.wait_ocr(match=chapter_select_words, box="bottom_right", time_out=5, raise_if_not_found=False):
+            if not self.wait_until(self.on_chapter_select, time_out=5, raise_if_not_found=False):
                 return False
         self.log_info("回到了章节选择页，点确认进回章节继续推", notify=True)
         self.debug_shot("back_on_chapter_select")

@@ -17,7 +17,7 @@ import numpy as np
 source = Path(__file__).resolve().parents[1] / "src/tasks/ClearMapTask.py"
 tree = ast.parse(source.read_text(encoding="utf-8"))
 cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ClearMapTask")
-wanted = ("read_difficulty", "ensure_difficulty", "ensure_hero", "panel_status")
+wanted = ("read_difficulty", "ensure_difficulty", "ensure_hero", "panel_status", "on_chapter_select")
 methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
 funcs = [
     n
@@ -42,11 +42,12 @@ consts = [
             "hero_state_re",
             "HERO_SWITCH_DX",
             "chapter_no_re",
+            "chapter_select_words",
         )
         for t in n.targets
     )
 ]
-ns = {"re": re, "cv2": cv2}
+ns = {"re": re, "cv2": cv2, "nav_tabs_re": re.compile(r"剧情战役|往期活动|补给作战|模拟作战|Supply\s*Missions")}
 exec(compile(ast.Module(body=consts + funcs + methods, type_ignores=[]), str(source), "exec"), ns)
 W, H = 1280, 768
 BLUE, RED, WHITE, GREY = (140, 110, 38), (40, 50, 170), (235, 235, 235), (150, 150, 150)  # BGR
@@ -188,6 +189,31 @@ class FakeTask:
 
 
 box_ = box
+
+
+class OnChapterSelectTest(unittest.TestCase):
+    def check(self, texts):
+        t = FakeTask()
+
+        def ocr(box=None, match=None, **kw):
+            pats = match if isinstance(match, list) else [match]
+            return [box_(n, 0, 0) for n in texts if any(re.search(m, n) for m in pats)]
+
+        t.ocr = ocr
+        return t.on_chapter_select()
+
+    def test_progress_text(self):
+        self.assertTrue(self.check(["章节进度", "100%"]))
+
+    def test_progress_hidden_by_art(self):
+        # 实录 8.7 章：「章节进度」叠在立绘上读不出，顶上页签和右下「普通 / 困难」都在
+        self.assertTrue(self.check(["剧情战役", "往期活动", "100%", "普通", "困难", "确认"]))
+
+    def test_other_tab_is_not_chapter_select(self):
+        self.assertFalse(self.check(["剧情战役", "模拟作战", "确认"]))
+
+    def test_map_is_not_chapter_select(self):
+        self.assertFalse(self.check(["LZ-1-6", "普通", "困难", "英雄难度"]))
 
 
 class EnsureDifficultyTest(unittest.TestCase):
