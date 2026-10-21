@@ -14,27 +14,36 @@ from src.core.debug_shot import save_debug_shot
 from src.core.support_select import (
     AvatarBook,
     BUTTON_BOX,
-    COUNT_BOX,
-    MAP_BOX,
-    NAME_BOX,
-    PANEL_BOX,
-    TAB_BOX,
     check_point,
+    COUNT_BOX,
     empty_tiles,
     far_point,
     filter_point,
-    find_deploy_tiles,
-    find_unit_tags,
-    unit_tiles_from_tags,
     find_cards,
+    find_deploy_tiles,
     find_tiles,
+    find_tutorial_tile,
+    find_unit_tags,
     identify_cards,
     is_orange_check,
+    MAP_BOX,
     merge_tiles,
+    NAME_BOX,
     order_tiles,
+    PANEL_BOX,
+    parse_support_count,
     pick_candidates,
     pick_withdraw_target,
     read_badge,
+    support_card_points,
+    SUPPORT_COUNT_BOX,
+    support_lv_re,
+    SUPPORT_TAB_BOX,
+    SUPPORT_TAB_XY,
+    TAB_BOX,
+    TUTORIAL_BOX,
+    tutorial_step,
+    unit_tiles_from_tags,
 )
 from src.core.debug_config import DEBUG_OPTION_NAME, KEY_DEBUG_SHOT
 from src.core.stamina_config import KEY_AUTO_POTION, STAMINA_OPTION_NAME
@@ -1149,6 +1158,171 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         self.debug_shot("lineup_done")
         return count[0] >= count[1]
 
+    # ------------------------------------------------------------------ 支援单位（第 9 章起，实录 2026-10-20）
+    def _support_count(self):
+        """顶部「支援 2/3」→ (2, 3)；这一关没有支援单位返回 None。"""
+        boxes = self._ocr_panel(SUPPORT_COUNT_BOX)
+        count = parse_support_count([b.name for b in boxes])
+        self.log_info(f"支援计数区文字: {[b.name for b in boxes]} -> {count}", notify=False)
+        return count
+
+    def _support_button(self):
+        """右下角：("deploy", box) 部署支援单位 / ("withdraw", box) 撤回支援单位 / ("hint", box) 请点击地格 / (None, None)。"""
+        boxes = self._ocr_panel(BUTTON_BOX)
+        for b in boxes:
+            if "部署支援" in b.name:
+                return "deploy", b
+            if "撤回支援" in b.name:
+                return "withdraw", b
+        for b in boxes:
+            if "地格" in b.name or "拖拽" in b.name:
+                return "hint", b
+        return None, None
+
+    def _click_support_tab(self, name):
+        """底部中间「部署人形 / 部署支援」页签；OCR 漏读就按固定位置点。"""
+        tab = self._ocr_panel(SUPPORT_TAB_BOX, match=self.fix_match_regex([name]))
+        if tab:
+            self.click(tab[0], after_sleep=1)
+        else:
+            xy = SUPPORT_TAB_XY[name]
+            self.log_info(f"页签「{name}」OCR 没认出来，按固定位置点", notify=False)
+            self.click_relative(xy[0], xy[1], after_sleep=1)
+        self.next_frame()
+
+    def _ensure_unit_tab(self):
+        """部署界面停在「部署支援」页签时（右上是「可部署支援单位」），切回「部署人形」，整理阵容的面板逻辑才认得。"""
+        if self._ocr_panel(TAB_BOX, match=self.fix_match_regex(["可部署支援单位"])):
+            self.log_info("部署界面停在「部署支援」页签，切回「部署人形」", notify=False)
+            self._click_support_tab("部署人形")
+            return True
+        return False
+
+    def _support_cards(self):
+        """右侧「可部署支援单位」面板的卡片 [{center, check, deployed}]，按位置排序。"""
+        boxes = self._ocr_panel(PANEL_BOX, match=support_lv_re)
+        cards = support_card_points(boxes, self.width, self.height)
+        for c in cards:
+            c["deployed"] = is_orange_check(self.frame, *c["check"])
+        self.log_info(f"支援卡片 {len(cards)} 张，已部署 {sum(c['deployed'] for c in cards)} 张", notify=False)
+        return cards
+
+    def _click_support_card(self, card):
+        self.click_relative(card["center"][0] / self.width, card["center"][1] / self.height, after_sleep=0.8)
+        self.next_frame()
+
+    def _follow_support_tutorial(self, max_steps=8):
+        """
+        第一次进第 9 章时可露凯的「通信中」引导挡在部署界面上，别的什么都点不了：
+        按提示点红框支援点 / 点对话框推进 / 点「部署支援单位」，直到对话框消失。返回是否处理过引导。
+        """
+        handled = False
+        for step in range(max_steps):
+            boxes = self._ocr_panel(TUTORIAL_BOX)
+            names = [b.name for b in boxes]
+            action = tutorial_step(names)
+            if action is None:
+                return handled
+            handled = True
+            self.log_info(f"支援单位引导：{names} → {action}", notify=step == 0)
+            self.debug_shot(f"support_tutorial_{step}")
+            if action == "tile":
+                xy = find_tutorial_tile(self.frame, self.width, self.height)
+                if xy is None:
+                    self.log_info("没找到引导红框圈住的支援点，点对话推进", notify=True)
+                    self.click(boxes[-1], after_sleep=1.5)
+                else:
+                    self.click_relative(xy[0] / self.width, xy[1] / self.height, after_sleep=1.5)
+            elif action == "button":
+                kind, btn = self._support_button()
+                if kind == "deploy":
+                    self.click(btn, after_sleep=1.5)
+                else:
+                    self.click_relative(0.885, 0.94, after_sleep=1.5)
+            else:
+                self.click(boxes[-1], after_sleep=1.5)
+            self.next_frame()
+        self.log_info(f"支援单位引导 {max_steps} 步后还没结束，继续往下走", notify=True)
+        return handled
+
+    def deploy_supports(self):
+        """
+        第 9 章起的支援单位：顶部有「支援 n/m」且 n<m 时切到「部署支援」页签，选一张没部署的卡片、
+        逐个点蓝色支援点，出现「部署支援单位」就点；点到「撤回支援单位」说明那格已有单位，换下一格。
+        部署满或没有可部署的就切回「部署人形」页签。返回是否部署过。
+        """
+        self._follow_support_tutorial()
+        count = self._support_count()
+        if count is None:
+            return False
+        n, m = count
+        if n >= m:
+            self.log_info(f"支援单位已满 {n}/{m}", notify=False)
+            return False
+        self.info_set("current_task", "部署支援单位")
+        self.log_info(f"支援单位 {n}/{m}，开始部署", notify=True)
+        self._click_support_tab("部署支援")
+        tried = []
+        min_gap = (0.03 * self.height) ** 2
+        deployed = False
+        for _ in range(m * 3):
+            if n >= m:
+                break
+            cards = self._support_cards()
+            free = [c for c in cards if not c["deployed"]]
+            if not free:
+                self.log_info("没有可部署的支援卡片了", notify=True)
+                break
+            card = free[0]
+            self._click_support_card(card)
+            tiles = [
+                t["center"]
+                for t in find_deploy_tiles(self.frame, self.width, self.height)
+                if all((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 >= min_gap for x, y in tried)
+            ]
+            self.debug_shot("support_tiles")
+            if not tiles:
+                self.log_info("地图上没找到还没试过的支援点", notify=True)
+                break
+            placed = False
+            for tile in tiles:
+                tried.append(tile)
+                self.click_relative(tile[0] / self.width, tile[1] / self.height, after_sleep=1)
+                self.next_frame()
+                kind, btn = self._support_button()
+                if kind not in ("deploy", "withdraw"):
+                    # 先点格子再点卡片的顺序也试一下
+                    self._click_support_card(card)
+                    kind, btn = self._support_button()
+                self.log_info(f"支援点({int(tile[0])},{int(tile[1])}) 按钮状态 {kind}", notify=False)
+                if kind == "withdraw":
+                    self._clear_selection()
+                    self._click_support_card(card)
+                    continue
+                if kind != "deploy":
+                    continue
+                self.click(btn, after_sleep=1.5)
+                self.next_frame()
+                if confirm := self.ocr(match=self.fix_match_regex(["确认"]), box=self.box.bottom):
+                    self.click(confirm, after_sleep=1.5)
+                    self.next_frame()
+                new = self._support_count()
+                if new and new[0] > n:
+                    n = new[0]
+                    deployed = placed = True
+                    self.log_info(f"已部署支援单位，{n}/{m}", notify=True)
+                    self._clear_selection()
+                    break
+                self.log_info("点了「部署支援单位」但计数没涨，换下一个支援点", notify=True)
+                self._clear_selection()
+                self._click_support_card(card)
+            if not placed:
+                self.log_info(f"这张支援卡片在所有支援点都没能部署，停止（{n}/{m}）", notify=True)
+                break
+        self.debug_shot("supports_done")
+        self._click_support_tab("部署人形")
+        return deployed
+
     def _handle_stamina_popup(self, title):
         """
         体力不足弹窗：全局设置「体力」里开了「自动使用体力药」就只用调度室储存/情报拼图道具恢复，
@@ -1301,7 +1475,11 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             return
         if result[0].name == "作战开始":
             self.sleep(2)
+            # 实录 2026-10-20：第一次进第 9 章时「支援单位」引导挡在部署界面上，不先按引导走完什么都点不了
+            self._follow_support_tutorial()
             lineup_on = self.LINEUP_TASK or self._lineup_kind is not None
+            if lineup_on:
+                self._ensure_unit_tab()
             if lineup_on and (keep_lineup or self._lineup_verified()):
                 # 任务启动后只在第一次进部署界面时整理阵容；之后不管是「继续前进」还是从选关面板「挑战」进来，
                 # 游戏都沿用上一场的阵容（含助战），只看一眼人数没缺就直接开战
@@ -1316,6 +1494,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 self.prepare_lineup()
                 self._mark_lineup_verified()
             if lineup_on:
+                # 第 9 章起每关有自己的支援点，不管阵容整不整理都要看一眼支援有没有上满
+                self.deploy_supports()
                 if self._deploy_button()[0] in ("withdraw", "blocked"):
                     self._clear_selection()
                 result = self.wait_ocr(match="作战开始", box=self.box.bottom, time_out=10, raise_if_not_found=True)

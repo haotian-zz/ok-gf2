@@ -521,3 +521,99 @@ def pick_withdraw_target(units, chosen, own_power, name_like):
         t, n, p = min(owns, key=lambda x: x[2])
         return t, n, f"我方战力最低({p})"
     return None
+
+
+# ------------------------------------------------------------------ 支援单位（第 9 章起，实录 2026-10-20）
+# 部署界面顶部多一行「支援 2/3」，底部中间多一对「部署人形 / 部署支援」页签，支援点是带 ♜ 图标的蓝色地格，
+# 右侧面板「可部署支援单位」是一排 Lv.20 的工事/炮塔/地雷卡片，右下角按钮是「部署支援单位 / 撤回支援单位」。
+# 第一次进第 9 章时可露凯的「通信中」引导挡在部署界面上：先点红框支援点 → 对话推进 → 点高亮的「部署支援单位」。
+SUPPORT_COUNT_BOX = (0.33, 0.06, 0.67, 0.14)  # 顶部第二行「支援 2/3」（第一行「人形 4/4」在 0.05 以上）
+SUPPORT_TAB_BOX = (0.38, 0.80, 0.64, 0.88)  # 底部中间「部署人形 / 部署支援」页签
+SUPPORT_TAB_XY = {"部署人形": (0.452, 0.839), "部署支援": (0.547, 0.839)}  # OCR 漏读时按固定位置点
+TUTORIAL_BOX = (0.16, 0.08, 0.60, 0.20)  # 可露凯头像右边的名字牌和橙色指示文字（左边的作战目标不在这个范围里）
+SUPPORT_CARD_DY = -0.055  # 卡片中心相对「Lv.20」标签中心：往上 0.055 画面高
+SUPPORT_CHECK_DX, SUPPORT_CHECK_DY = 0.022, -0.112  # 已部署的橙色勾相对「Lv.20」标签中心
+# 引导红框是粉红色细边 + 橙色角标（饱和度 70~130），蓝地格色相在 100 附近、单位血条是纯红（饱和度 200+），互不混淆
+TUTORIAL_TILE_HSV = (((0, 50, 170), (12, 170, 255)), ((165, 50, 170), (180, 170, 255)))
+TUTORIAL_TILE_MAX_FILL = 0.5  # 红框是空心的：连通域面积 / 外接框面积要小，实心色块不算
+support_lv_re = re.compile(r"L[vV]\.?\s*\d+")
+support_count_label_re = re.compile(r"支\s*援")
+tutorial_text_re = re.compile(r"可露凯|通信中|点击.*部署|提醒|提示|支援单位")
+
+
+def parse_support_count(names):
+    """顶部「支援 2/3」那一行的 OCR 文字 → (2, 3)；没有「支援」标签或没有计数返回 None。"""
+    if not any(support_count_label_re.search(n) for n in names):
+        return None
+    for n in names:
+        # 和 BaseGfTask.parse_deploy_count 同样的容错：斜杠常被读成 1/l/I
+        m = re.search(r"(\d)\s*[/|\\]\s*(\d)", n) or re.fullmatch(r"(\d)[1lI](\d)", n.strip())
+        if m and int(m.group(2)) >= int(m.group(1)):
+            return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def tutorial_step(names):
+    """
+    引导对话框里的文字 → 下一步：
+    - 提到「部署点」：点红框支援点 → "tile"
+    - 提到「部署支援单位」：点右下角按钮 → "button"
+    - 其他对话（提醒/提示）：点对话框推进 → "advance"
+    - 没有引导文字：None
+    """
+    if not any(tutorial_text_re.search(n) for n in names):
+        return None
+    text = "".join(names)
+    if "部署点" in text:
+        return "tile"
+    if "部署支援单位" in text:
+        return "button"
+    return "advance"
+
+
+def find_tutorial_tile(frame, width, height):
+    """地图上被引导红框圈住的支援点中心 (x, y)；没有返回 None。"""
+    if frame is None:
+        return None
+    s = height / 768
+    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+    mask = None
+    for lo, hi in TUTORIAL_TILE_HSV:
+        m = cv2.inRange(hsv, lo, hi)
+        mask = m if mask is None else (mask | m)
+    k = max(3, int(15 * s)) | 1
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    n, _, stats, cents = cv2.connectedComponentsWithStats(mask)
+    best = None
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        bw, bh = stats[i, 2], stats[i, 3]
+        # 红框外接框实测 92x61（1280x768 比例）；右上角敌方标记只有 68x38，别认成它
+        if area < 400 * s * s or not (75 * s <= bw <= 300 * s) or not (48 * s <= bh <= 220 * s):
+            continue
+        if area / float(bw * bh) > TUTORIAL_TILE_MAX_FILL:
+            continue
+        if best is None or area > best[0]:
+            # 用外接框中心而不是质心：红框上还带着橙色角标，质心会被拉偏
+            bx, by = stats[i, 0], stats[i, 1]
+            best = (area, (x0 + bx + bw / 2, y0 + by + bh / 2))
+    return (int(best[1][0]), int(best[1][1])) if best else None
+
+
+def support_card_points(lv_boxes, width, height):
+    """右侧面板「Lv.20」标签 → 卡片中心和勾选采样点，先上后下、先左后右。"""
+    cards = []
+    for b in lv_boxes:
+        if not support_lv_re.search(b.name):
+            continue
+        cx, cy = _center(b)
+        cards.append(
+            {
+                "center": (int(cx), int(cy + SUPPORT_CARD_DY * height)),
+                "check": (int(cx + SUPPORT_CHECK_DX * width), int(cy + SUPPORT_CHECK_DY * height)),
+                "lv": b.name,
+            }
+        )
+    cards.sort(key=lambda c: (round(c["center"][1] / (0.05 * height)), c["center"][0]))
+    return cards
