@@ -124,7 +124,10 @@ class LineupMixin:
         own = self._observe_own()
         supports = []
         own_on = sum(1 for u in own if u.deployed)
-        if need_map and (count is None or count[0] > own_on):
+        if need_map and count is not None and count[0] - own_on == 1 and self._borrowed_support:
+            # 多出来的一个就是这次刚放上去的助战，不用再挨个点地图
+            supports = [Unit(self._borrowed_support, 0, deployed=True, support=True)]
+        elif need_map and (count is None or count[0] > own_on):
             # 场上人数比我方打勾的多 = 有助战在场（读不到计数也看一眼）
             supports = self._supports_on_map(own)
         if self._deploy_button()[0] in ("withdraw", "blocked", "swap"):
@@ -178,10 +181,25 @@ class LineupMixin:
             self.log_info(f"没撤下 {u.name}（{step.why}）", notify=True)
         return ok
 
+    def _locate_own_card(self, u):
+        """
+        重新扫一遍我的人形，按战力（和名字）找到这张卡现在的位置。
+        面板里在场的卡片排在前面，撤下/补上一个人后顺序就变了（实录 2026-10-20：撤下威玛西娜后按旧位置点，
+        点到的是威玛西娜而不是要补的 OTs-14），所以不能用观察时记下的坐标。
+        """
+        self._open_own_tab()
+        cards = self._scan_cards()
+        same = [c for c in cards if c["power"] == u.power]
+        named = [c for c in same if u.name and c["name"] and self._name_like(c["name"], u.name)]
+        card = (named or same or [None])[0]
+        if card is None:
+            self.log_info(f"面板上没找到 {u.name}（战力 {u.power}）", notify=False)
+        return card
+
     def _withdraw_own_card(self, u, why):
         """优先从面板撤：点打勾的卡片会在地图上选中它，按钮变「撤回人形」；不行再去地图上找。"""
-        self._open_own_tab()
-        x, y = u.ref["center"]
+        card = self._locate_own_card(u) or u.ref
+        x, y = card["center"]
         self.click_relative(x / self.width, y / self.height, after_sleep=0.8)
         self.next_frame()
         kind, button = self._deploy_button()
@@ -230,14 +248,17 @@ class LineupMixin:
             if ok:
                 self._borrowed_support = u.name
         else:
-            reselect = self._own_reselect(u.ref)
+            card = self._locate_own_card(u)
+            if card is None:
+                return False
+            reselect = self._own_reselect(card)
             reselect()
             name = self._selected_role_name() or u.name
             if want is not None and self._name_like(name, want.name):
                 self.log_info(f"{name} 和助战同名，不补", notify=False)
                 return False
             if not u.name and name:
-                self._learn_card(u.ref, name)
+                self._learn_card(card, name)
             ok = self._place_selected(f"我的人形 {name}（战力 {u.power}，{step.why}）", name, before=before, reselect=reselect)
         if ok and self._freed_tiles:
             self._freed_tiles.pop(0)

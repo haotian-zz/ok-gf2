@@ -210,6 +210,22 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(len(s.on_map), 4)
 
 
+class LocateCardTest(unittest.TestCase):
+    """实录 2026-10-20：面板里在场的卡片排前面，撤下威玛西娜后顺序变了，按旧坐标点到了威玛西娜。"""
+
+    def test_card_found_by_power_after_reorder(self):
+        s = FakeScreen(4, OWN, [])
+        s._open_own_tab = lambda: None
+        s._scan_cards = lambda: [
+            {"name": "春田", "power": 3224, "center": (100, 100)},
+            {"name": "OTs-14", "power": 5409, "center": (200, 100)},
+            {"name": "威玛西娜", "power": 4522, "center": (300, 100)},
+        ]
+        stale = Unit("OTs-14", 5409, ref={"center": (300, 100)})
+        self.assertEqual(s._locate_own_card(stale)["center"], (200, 100))
+        self.assertIsNone(s._locate_own_card(Unit("X", 1)))
+
+
 class VisionTest(unittest.TestCase):
     def test_freed_tile_from_frame_diff(self):
         import numpy as np
