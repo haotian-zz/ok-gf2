@@ -86,7 +86,9 @@ GAME_EXIT_TIMEOUT = 20  # 秒：点「确认」后等游戏自己退出的时间
 rank_up_notice_re = re.compile(r"晋升至|段位可获得|补给将通过邮件发放")  # 「您已晋升至新锐·三」段位晋升通知，ESC 能关
 battle_result_re = re.compile(r"^对战(胜利|失败)$|已结束$")  # 「对战胜利 / 对战失败」结算页只有「确认」能关
 # 每个任务开始前的隐藏步骤「确保游戏已进入主页」
-title_start_re = re.compile(r"点击开始")  # 标题页底部的「点击开始」
+title_start_re = re.compile(r"点击开始")
+story_skip_re = re.compile(r"跳过")  # 剧情对话右上角的「跳过 / 全部跳过」（可能和「自动」连成一个框）
+main_marks = ["整备室", "公共区", "活动层", re.compile("招募")]  # 主页右侧的入口文字  # 标题页底部的「点击开始」
 GAME_LAUNCH_MAIN_TIMEOUT = 150  # 秒：从拉起游戏到进入主页的上限（实机：启动到标题约 50 秒，再加公告弹窗）
 GAME_FRESH_SECONDS = 180  # 秒：游戏进程比这更新，就当成刚被框架拉起、还停在启动/标题页，要走一遍进主页
 
@@ -1558,7 +1560,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         self.sleep(2)
 
     def is_main(self, recheck_time=0.0, esc=True):
-        boxes = self.ocr(match=["整备室", "公共区", "活动层", re.compile("招募")], box="right", log=True)
+        boxes = self.ocr(match=main_marks, box="right", log=True)
         feature_boxes = []
         for feature in [fL.dog_icon, fL.message_icon]:
             if result := self.find_one(feature, vertical_variance=0.002, horizontal_variance=0.002):
@@ -1569,6 +1571,12 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
             self._cancel_streak = 0
             return True
         if self._handle_restart_required():
+            return False
+        # 剧情对话：右上角「自动 / 跳过 / 全部跳过」，ESC 没用，交给 skip_dialogs 点「跳过」
+        # （实录 2026-10-21：停掉推图时正好在放下一章的开场剧情，接着跑一键日常，回主页 90 秒超时；OCR 会把「自动跳过」读成一个框）
+        if self.ocr(box=self.box.top_right, match=story_skip_re):
+            self.log_info("画面是剧情对话，先跳过剧情再回主页", notify=False)
+            self.skip_dialogs(end_match=main_marks, time_out=20, raise_if_not_found=False)
             return False
         # if not self.do_handle_alert()[0]:
         if self.ocr(match=re.compile("^是否离开活动层"), box=self.box.center, log=True):
