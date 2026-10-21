@@ -91,8 +91,6 @@ class DailyActivityMixin:
                 return True
             if page < 7:
                 self._scroll_supply_menu(-3)
-        # 留一张活动列表的图，方便核对当前活动页到底有没有这个入口
-        self.screenshot(f"supply_not_found_{reward_activity}")
         return False
 
     def _scroll_supply_menu(self, count):
@@ -472,7 +470,7 @@ class DailyActivityMixin:
                 self.back(after_sleep=2)
                 return "done"
             if self.wait_click_ocr(match=main_btn, box=self.box.bottom_right, time_out=10):
-                if self._dismiss_already_active(entry_match.pattern):
+                if self._dismiss_already_active(getattr(entry_match, "pattern", entry_match)):
                     return "done"
                 if not self.wait_click_ocr(match=second_btn, time_out=3, after_sleep=2):
                     # 实录：今天已经吃过饭时点「下一步」后不会出现「确认邀请」，留下画面文字和截图，好判断是不是"已完成"

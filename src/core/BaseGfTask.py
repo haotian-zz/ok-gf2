@@ -316,7 +316,11 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
 
     def _touch_progress(self):
         self._progress_ts = time.time()
-        frame = getattr(self.executor, "_frame", None)
+        try:
+            executor = self.executor
+        except AttributeError:  # 还没绑定执行器（单测桩、初始化早期）
+            return
+        frame = getattr(executor, "_frame", None)
         if frame is not None:
             self._last_frame = frame
 
