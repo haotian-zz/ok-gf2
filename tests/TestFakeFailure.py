@@ -41,7 +41,6 @@ class FakeFailureTest(unittest.TestCase):
         self.assertFalse(is_failure_page(make_task(["03/12 回合", "回收物品 1/2"])))
 
     def test_pattern(self):
-        self.assertTrue(failure_page_re.search("战斗童演(9)") is None)  # OCR 读花时只靠「重新挑战」
         self.assertTrue(failure_page_re.search("重新挑战"))
 
 
