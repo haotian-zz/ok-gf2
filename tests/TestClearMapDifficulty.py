@@ -179,6 +179,9 @@ class FakeTask:
     def log_info(self, msg, notify=False):
         self.log.append(msg)
 
+    def sleep(self, *a):
+        pass
+
     def box_of_screen(self, x, y, to_x, to_y):
         return ("box", x, y, to_x, to_y)
 
@@ -238,6 +241,14 @@ class EnsureDifficultyTest(unittest.TestCase):
         t.ensure_difficulty("困难")
         self.assertEqual((t.page, t.difficulty, t.chapter), ("map", "困难", 4))
         self.assertEqual(t.clicks, ["困难", "困难"])
+
+    def test_buttons_missing_raises_without_leaving_map(self):
+        # 实录进 14.0：按钮还没出来时不能当成「难度不对」退回章节选择页
+        t = FakeTask("普通")
+        t.page = "loading"
+        with self.assertRaises(Exception):
+            t.ensure_difficulty("普通")
+        self.assertEqual(t.page, "loading")
 
     def test_back_to_normal(self):
         t = FakeTask("困难")
