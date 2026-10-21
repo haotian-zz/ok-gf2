@@ -285,5 +285,24 @@ class GfInteractionTest(unittest.TestCase):
         self.assertEqual(it.calls, [("destroy",)])
 
 
+class InteractionConfigTest(unittest.TestCase):
+    def test_interaction_is_a_list_with_postmessage_fallback(self):
+        """Qt「捕获」页的输入方式列表只接受字符串或列表；写成单个类会报 len(type)（实录 2026-10-21）。"""
+        import ast
+        from pathlib import Path as _Path
+
+        tree = ast.parse((_Path(__file__).resolve().parents[1] / "src/config.py").read_text(encoding="utf-8"))
+        windows = next(
+            v
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Dict)
+            for k, v in zip(node.keys, node.values, strict=True)
+            if isinstance(k, ast.Constant) and k.value == "interaction"
+        )
+        self.assertIsInstance(windows, ast.List)
+        names = [e.id if isinstance(e, ast.Name) else e.value for e in windows.elts]
+        self.assertEqual(names, ["GfInteraction", "Genshin"])
+
+
 if __name__ == "__main__":
     unittest.main()
