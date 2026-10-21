@@ -143,15 +143,18 @@ class FakeScreen(LineupMixin):
 
     # 被替换的三个动作
     map_blind = False  # 点地图认不出助战（实录 LA-1-3）
+    count_always_fails = False  # 顶部 n/m 一直读不到（实录 13-1）
 
     def _observe_lineup(self, need_map=True, want=None):
+        if self.count_always_fails:
+            self.fail.append(("count", None))
         n = None if self._take_fail("count", None) else len(self.on_map)
         own_on = {name for name, s in self.on_map if not s}
         units = [Unit(name, p, deployed=name in own_on) for name, p in self.own_cards.items()]
         supports = [Unit(name, 0, deployed=True, support=True) for name, s in self.on_map if s] if need_map else []
         known = self._borrowed_support or (want.name if want is not None and want.deployed else None)
         if self.map_blind:
-            supports = [Unit(known, 0, deployed=True, support=True)] if known and n is not None and n - len(own_on) == 1 else []
+            supports = [Unit(known, 0, deployed=True, support=True)] if known and (n is None or n - len(own_on) == 1) else []
         return LineupState(None if n is None else self.cap, n, units, supports)
 
     def _withdraw(self, step):
@@ -215,6 +218,18 @@ class ReconcileTest(unittest.TestCase):
         want = Unit("威玛西娜", 24871, deployed=True, support=True)
         self.assertTrue(s.reconcile_lineup(want))
         self.assertCountEqual(s.on_map, [("春田", False), ("贝丝蒂", False), ("罗蕾莱", False), ("威玛西娜", True)])
+
+    def test_count_unreadable_support_checked_does_nothing(self):
+        """实录 2026-10-20 13-1：顶部只读到「4」，助战在场且好友列表里打了勾——什么都不该做。"""
+        s = FakeScreen(4, OWN, [("OTs-14", False), ("春田", False), ("贝丝蒂", False), ("威玛西娜", True)])
+        s.map_blind = True
+        s.count_always_fails = True
+        deployed = []
+        orig = s._deploy
+        s._deploy = lambda step, want: deployed.append(step.unit.name) or orig(step, want)
+        s.reconcile_lineup(Unit("威玛西娜", 24871, deployed=True, support=True))
+        self.assertEqual(deployed, [])
+        self.assertEqual(len(s.on_map), 4)
 
     def test_keep_existing_support(self):
         s = FakeScreen(4, OWN, [("春田", False), ("贝丝蒂", False), ("琼玖", False), ("威玛西娜", True)])

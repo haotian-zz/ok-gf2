@@ -25,6 +25,7 @@ STEP_MAX_FAILS = 2  # 同一个动作失手两次就不再试（撤人/上助战
 class LineupMixin:
     _borrowed_support = None  # 这次整理借上场的助战名字（补人时跳过同名）
     _freed_tiles = None  # 撤人后空出来的地格，部署时优先点
+    _lineup_capacity = None  # 这个部署界面里读到过的「部署人形 n/m」的 m
 
     # ------------------------------------------------------------------ 入口
     def prepare_lineup(self):
@@ -66,6 +67,7 @@ class LineupMixin:
         :return: 最后一次观察时是否满员（读不到计数返回 False）
         """
         self.info_set("current_task", "整理阵容")
+        self._lineup_capacity = None
         wanted = want
         failed = Counter()  # 动作 -> 失手次数
         state = None
@@ -121,20 +123,24 @@ class LineupMixin:
     def _observe_lineup(self, need_map=True, want=None):
         """读顶部 n/m、我的人形面板（打勾=在场），需要时再点地图上的单位找出场上的助战。"""
         count = self._deploy_count()
+        if count is not None:
+            self._lineup_capacity = count[1]
         own = self._observe_own()
         supports = []
         own_on = sum(1 for u in own if u.deployed)
         known = self._borrowed_support or (want.name if want is not None and want.deployed else None)
-        if need_map and count is not None and count[0] - own_on == 1 and known:
-            # 多出来的一个就是要借的助战（这次刚放上去的，或好友助战列表里它已经打了勾），不用再挨个点地图
-            # （实录 2026-10-20 LA-1-3：游戏沿用了上一关的助战威玛西娜，点地图没认出来，白撤了一个人）
+        if need_map and known and (count is None or count[0] - own_on == 1):
+            # 要借的助战已经在场（这次刚放上去的，或好友助战列表里它打了勾），不用再挨个点地图
+            # （实录 2026-10-20 LA-1-3：游戏沿用了上一关的助战，点地图没认出来，白撤了一个人；
+            #  13-1：顶部只读到「4」没读到「/4」，又去点地图，没认出助战，白试了一分钟部署）
             supports = [Unit(known, 0, deployed=True, support=True)]
         elif need_map and (count is None or count[0] > own_on):
             # 场上人数比我方打勾的多 = 有助战在场（读不到计数也看一眼）
             supports = self._supports_on_map(own)
         if self._deploy_button()[0] in ("withdraw", "blocked", "swap"):
             self._clear_selection()
-        return LineupState(count[1] if count else None, count[0] if count else None, own, supports)
+        # 顶部 n/m 这一帧没读到时，用这个部署界面里之前读到过的总人数；已上场人数按打勾的卡片 + 场上助战数
+        return LineupState(count[1] if count else self._lineup_capacity, count[0] if count else None, own, supports)
 
     def _open_own_tab(self):
         """切到我的人形并点「全部」筛选（筛选和好友助战共用，借完助战可能还停在某个属性上）。"""
