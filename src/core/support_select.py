@@ -33,6 +33,11 @@ BADGE_DIGIT_R = 5.5  # 只看圆内这个半径里的白色像素
 BADGE_SIZE = 13  # 模板尺寸
 BADGE_MIN_IOU = 0.6
 BADGE_DIR = os.path.join("assets", "support_badges")
+# 蓝圈颜色 (S 下限, V 下限)：先按 1280x768 实测的亮蓝找，找不到再放宽
+# （实录 2026-10-20：gf2 会话 2560x1440 下蓝圈是暗青色，V 只有 120~160）
+BADGE_DISK_COLORS = ((25, 170), (60, 100))
+BADGE_OCR_WHITE = 170  # OCR 前二值化：三通道都高于它算数字笔画
+BADGE_OCR_MIN_CONF = 0.5
 
 _badge_templates = None
 
@@ -122,21 +127,24 @@ def find_badge_disk(frame, x, y, scale=1.0):
     if win.size == 0:
         return None
     hsv = cv2.cvtColor(win, cv2.COLOR_BGR2HSV)
-    blue = ((hsv[..., 0] > 85) & (hsv[..., 0] < 110) & (hsv[..., 1] > 25) & (hsv[..., 2] > 170)).astype(np.uint8)
-    blue = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-    n, _, stats, cents = cv2.connectedComponentsWithStats(blue)
     lo, hi = 9 * scale, 18 * scale
-    best = None
-    for i in range(1, n):
-        area = stats[i, cv2.CC_STAT_AREA]
-        bw, bh = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
-        if not (60 * scale * scale <= area <= 260 * scale * scale and lo <= bw <= hi and lo <= bh <= hi):
-            continue
-        cx, cy = cents[i]
-        d = (x0 + cx - x) ** 2 + (y0 + cy - y) ** 2
-        if best is None or d < best[0]:
-            best = (d, x0 + cx, y0 + cy)
-    return None if best is None else (best[1], best[2])
+    for s_min, v_min in BADGE_DISK_COLORS:
+        blue = ((hsv[..., 0] > 85) & (hsv[..., 0] < 110) & (hsv[..., 1] > s_min) & (hsv[..., 2] > v_min)).astype(np.uint8)
+        blue = cv2.morphologyEx(blue, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        n, _, stats, cents = cv2.connectedComponentsWithStats(blue)
+        best = None
+        for i in range(1, n):
+            area = stats[i, cv2.CC_STAT_AREA]
+            bw, bh = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+            if not (60 * scale * scale <= area <= 260 * scale * scale and lo <= bw <= hi and lo <= bh <= hi):
+                continue
+            cx, cy = cents[i]
+            d = (x0 + cx - x) ** 2 + (y0 + cy - y) ** 2
+            if best is None or d < best[0]:
+                best = (d, x0 + cx, y0 + cy)
+        if best is not None:
+            return best[1], best[2]
+    return None
 
 
 def badge_digit_mask(frame, cx, cy, scale=1.0, dx=0.0, dy=0.0, white=215):
@@ -159,21 +167,55 @@ def _iou(a, b):
     return float((a & b).sum() / max(1, (a | b).sum()))
 
 
-def read_badge(frame, power_box, width, height, templates=None):
+def badge_ocr_image(frame, cx, cy, scale=1.0):
+    """蓝圈裁出来、白字二值化成黑字白底、放大加边，给 OCR 只做识别（不做检测）。"""
+    r = int(round(7 * scale))  # 只要圈里，不要圈外的立绘
+    h, w = frame.shape[:2]
+    crop = frame[max(0, int(cy) - r) : min(h, int(cy) + r), max(0, int(cx) - r) : min(w, int(cx) + r)]
+    if crop.size == 0:
+        return None
+    ink = np.where(crop.min(axis=2) > BADGE_OCR_WHITE, 0, 255).astype(np.uint8)
+    yy, xx = np.mgrid[0 : ink.shape[0], 0 : ink.shape[1]]
+    ox, oy = int(cx) - max(0, int(cx) - r), int(cy) - max(0, int(cy) - r)
+    ink[(xx - ox) ** 2 + (yy - oy) ** 2 > r * r] = 255  # 圈外的卡片底色也是白的，抹掉
+    big = cv2.resize(ink, None, fx=5.6 / scale, fy=5.6 / scale, interpolation=cv2.INTER_CUBIC)
+    big = cv2.copyMakeBorder(big, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
+    return cv2.cvtColor(big, cv2.COLOR_GRAY2BGR)
+
+
+def parse_badge_text(text):
+    """OCR 读到的椎数：单个数字 0~6，「—」读成 - / 一 / — 算 0（没椎），其他返回 None。"""
+    t = re.sub(r"[\s'\".,`:;|]", "", text or "")
+    if t in ("-", "—", "一", "－", "_"):
+        return 0
+    if len(t) == 1 and t in "0123456":
+        return int(t)
+    return None
+
+
+def read_badge(frame, power_box, width, height, templates=None, recognize=None):
     """
-    读战力数字左上方蓝圈里的椎数：0 表示「—」，None 表示没找到蓝圈或没匹配上任何模板。
+    读战力数字左上方蓝圈里的椎数：0 表示「—」，None 表示没找到蓝圈或没认出来。
+    :param recognize: 可选，img -> (文字, 置信度)，传了就先用 OCR 读圈里的数字（模板只有 1/4/6/—，
+        2560x1440 下笔画粗细也对不上），读不出来再退回模板比对。
     """
     if frame is None:
         return None
     templates = templates if templates is not None else load_badge_templates()
-    if not templates:
-        return None
     scale = height / 768
     px, py = _center(power_box)
     disk = find_badge_disk(frame, px + BADGE_DX * width, py + BADGE_DY * height, scale)
     if disk is None:
         return None
     cx, cy = disk
+    if recognize is not None:
+        img = badge_ocr_image(frame, cx, cy, scale)
+        text, conf = recognize(img) if img is not None else (None, 0.0)
+        badge = parse_badge_text(text)
+        if badge is not None and conf >= BADGE_OCR_MIN_CONF:
+            return badge
+    if not templates:
+        return None
     best, best_score = None, 0.0
     for digit, tpl in templates.items():
         score = max(_iou(badge_digit_mask(frame, cx, cy, scale, dx, dy), tpl) for dx in (-1, 0, 1) for dy in (-1, 0, 1))
@@ -491,36 +533,6 @@ def unit_tiles_from_tags(tags, height):
 
 
 # ------------------------------------------------------------------ 换人决策
-def pick_withdraw_target(units, chosen, own_power, name_like):
-    """
-    决定为助战腾位时撤谁。
-    :param units: 地图上点到的单位 [(tile, name), ...]
-    :param chosen: 选好的助战名字
-    :param own_power: 我方已上场 {名字: 战力}（来自我的人形里打勾的卡片）
-    :param name_like: 名字模糊比较函数
-    :return: "keep"（场上已是这个助战）/ (tile, name, 原因) / None（没有可撤的）
-    优先级：上一关借的旧助战（不在我方名单里）> 和助战同名的我方人形 > 我方战力最低的
-    """
-
-    def own_of(name):
-        return [p for n, p in own_power.items() if name_like(n, name)]
-
-    supports = [(t, n) for t, n in units if not own_of(n)]
-    for _, n in supports:
-        if name_like(n, chosen):
-            return "keep"
-    if supports:
-        t, n = supports[0]
-        return t, n, "上一关借的助战"
-    same = [(t, n) for t, n in units if name_like(n, chosen)]
-    if same:
-        t, n = same[0]
-        return t, n, "与助战同名"
-    owns = [(t, n, min(own_of(n))) for t, n in units if own_of(n)]
-    if owns:
-        t, n, p = min(owns, key=lambda x: x[2])
-        return t, n, f"我方战力最低({p})"
-    return None
 
 
 # ------------------------------------------------------------------ 支援单位（第 9 章起，实录 2026-10-20）
@@ -650,3 +662,35 @@ def fallback_empty_tiles(frame, width, height, known, occupied, min_dist_ratio=0
             out.append(c)
             taken.append(c)
     return out
+
+
+# ------------------------------------------------------------------ 撤下单位后空出来的地格
+FREED_DIFF = 40  # 灰度差超过它算变化
+FREED_MIN_AREA = 0.0015  # 变化块至少占画面面积这么多（人形立绘消失是一大块）
+
+
+def freed_tile(before, after, width, height):
+    """
+    撤下一个单位前后两帧对比，返回空出来的地格中心 (x, y)，没找到返回 None。
+    立绘消失的那块变化最大；人站在地格上，地格中心取变化块最下面 30% 像素的重心。
+    不靠地格颜色/编号标签（2560x1440 下这两种识别都不稳），分辨率无关。
+    """
+    if before is None or after is None or before.shape != after.shape:
+        return None
+    x0, y0, x1, y1 = (int(MAP_BOX[0] * width), int(MAP_BOX[1] * height), int(MAP_BOX[2] * width), int(MAP_BOX[3] * height))
+    a = cv2.cvtColor(before[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    b = cv2.cvtColor(after[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    diff = (cv2.absdiff(a, b) > FREED_DIFF).astype(np.uint8)
+    k = max(3, int(round(5 * height / 768)))
+    diff = cv2.morphologyEx(diff, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+    diff = cv2.morphologyEx(diff, cv2.MORPH_CLOSE, np.ones((k * 3, k * 3), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(diff)
+    if n <= 1:
+        return None
+    i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    if stats[i, cv2.CC_STAT_AREA] < FREED_MIN_AREA * width * height:
+        return None
+    ys, xs = np.nonzero(labels == i)
+    cut = np.percentile(ys, 70)
+    low = ys >= cut
+    return x0 + float(xs[low].mean()), y0 + float(ys[low].mean())

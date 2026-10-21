@@ -34,7 +34,6 @@ from src.core.support_select import (
     is_orange_check,
     make_check_frame,
     pick_candidates,
-    pick_withdraw_target,
     read_badge,
 )
 from src.tasks.ClearMapTask import (
@@ -494,23 +493,6 @@ class TestSupportSelect(unittest.TestCase):
         self.assertTrue(is_orange_check(frame, x, y))
         self.assertFalse(is_orange_check(frame, *check_point(cards[3], self.W, self.H)))
         self.assertFalse(is_orange_check(None, x, y))
-
-    def test_pick_withdraw_target(self):
-        like = BaseGfTask._name_like  # 可露凯/可露凱 这种 OCR 错字也要能对上
-        own = {"OTs-14": 4535, "春田": 2637, "贝丝带": 2629}
-        units = [((1, 1), "OTs-14"), ((2, 2), "可露凱"), ((3, 3), "春田"), ((4, 4), "贝丝带")]
-        # 旧助战优先撤
-        self.assertEqual(pick_withdraw_target(units, "威玛西娜", own, like), ((2, 2), "可露凱", "上一关借的助战"))
-        # 场上已是要借的助战
-        self.assertEqual(pick_withdraw_target(units, "可露凯", own, like), "keep")
-        # 没有旧助战：同名的我方人形
-        own2 = dict(own, 威玛西娜=3273)
-        units2 = [((1, 1), "OTs-14"), ((2, 2), "威玛西娜"), ((3, 3), "春田")]
-        self.assertEqual(pick_withdraw_target(units2, "威玛西娜", own2, like), ((2, 2), "威玛西娜", "与助战同名"))
-        # 否则战力最低
-        units3 = [((1, 1), "OTs-14"), ((3, 3), "春田"), ((4, 4), "贝丝带")]
-        self.assertEqual(pick_withdraw_target(units3, "莱娅", own, like), ((4, 4), "贝丝带", "我方战力最低(2629)"))
-        self.assertIsNone(pick_withdraw_target([], "莱娅", own, like))
 
     def test_filter_point_my_tab_lower(self):
         tab = Box(950, 20, 100, 30)
