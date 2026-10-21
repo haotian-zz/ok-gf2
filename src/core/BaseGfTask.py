@@ -1685,19 +1685,15 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         )
 
     def click_with_key(self, hold_key, result, delay1=1, delay2=0.5, after_sleep=0):
-        def start_task1():
-            self.send_key(key=hold_key, down_time=delay1)
-
-        def start_task2():
-            time.sleep(delay2)  # 控制任务2启动延迟
+        # 任务线程内执行，异常可传播且修饰键总会释放。
+        """Click while holding a modifier and guarantee its release on failure."""
+        try:
+            self.send_key_down(hold_key)
+            self.sleep(delay2)
             self.click(result)
-
-        t1 = threading.Thread(target=start_task1)
-        t2 = threading.Thread(target=start_task2)
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
+            self.sleep(max(0, delay1 - delay2))
+        finally:
+            self.send_key_up(hold_key)
         self.sleep(after_sleep)
 
     def wait_click_ocr(
@@ -1901,6 +1897,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
     def is_free_layer(self, time_out=20, every_time=1):
         # wait_ocr(time_out=0) 使用框架默认超时，不能用于单次探测。
         """按限定超时识别活动层 HUD，避免嵌套默认等待。"""
+
         def detected():
             """仅用当前帧检查活动层快捷键标识是否齐全。"""
             result = self.ocr(match=["Esc", "P", "M", "F1", "F2", "F3", "F4"], box=self.box.top)
