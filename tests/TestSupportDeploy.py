@@ -31,8 +31,11 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(ss.parse_support_count(["支援", "0/3"]), (0, 3))
         self.assertEqual(ss.parse_support_count(["支 援", "213"]), (2, 3))
         self.assertIsNone(ss.parse_support_count(["人形", "4/4"]))  # 没有支援行
-        self.assertIsNone(ss.parse_support_count(["支援"]))
         self.assertIsNone(ss.parse_support_count([]))
+        # 实录：第 2、3 波「0/3」被敌人名字/血条挡住
+        self.assertEqual(ss.parse_support_count(["支援", "灼光巨人"]), (None, None))
+        self.assertEqual(ss.parse_support_count(["支援", "3"]), (None, None))
+        self.assertEqual(ss.parse_support_count(["支援箱", "锤岩蟾蜍·冷凝", "1/3", "10"]), (1, 3))
 
     def test_tutorial_step(self):
         self.assertEqual(ss.tutorial_step(["可露凯", "点击地格上的支援单位部署点。"]), "tile")
@@ -148,6 +151,9 @@ class FakeTask:
     def log_info(self, *a, **k):
         pass
 
+    def sleep(self, *a):
+        pass
+
     def info_set(self, *a):
         pass
 
@@ -200,6 +206,7 @@ class FakeGame(FakeTask):
         self.tab = tab
         self.selected_tile = None
         self.selected_card = None
+        self.hide_count = False  # 计数被敌人名字挡住（OCR 读不到数字）
 
     @property
     def frame(self):
@@ -215,7 +222,12 @@ class FakeGame(FakeTask):
     def _ocr_panel(self, region, match=None, **kw):
         texts = []
         if region == C:
-            texts = ["支援", f"{self.count[0]}/{self.count[1]}"] if self.count else ["人形", "4/4"]
+            if self.count is None:
+                texts = ["人形", "4/4"]
+            elif self.hide_count:
+                texts = ["支援", "灼光巨人"]
+            else:
+                texts = ["支援", f"{self.count[0]}/{self.count[1]}"]
         elif region == S:
             texts = ["部署人形", "部署支援"]
         elif region == TAB:
@@ -294,6 +306,14 @@ class DeploySupportsTest(unittest.TestCase):
         self.assertTrue(game.deploy_supports())
         self.assertEqual(game.count, [3, 3])
         self.assertEqual(game.cards_deployed, [True, True, True])
+
+    def test_hidden_count_still_deploys_until_cards_or_points_run_out(self):
+        game = FakeGame([0, 3], {(300, 300): False, (400, 340): False, (500, 380): False}, [False, False, False, False])
+        game.hide_count = True
+        self.assertTrue(game.deploy_supports())
+        self.assertEqual(game.count, [3, 3])  # 三个支援点都上了（计数读不到，靠卡片勾选确认）
+        self.assertEqual(game.cards_deployed, [True, True, True, False])
+        self.assertEqual(game.calls[-1], ("click", "部署人形"))
 
     def test_no_free_card_stops(self):
         game = FakeGame([1, 3], {(300, 300): True, (400, 340): False}, [True])

@@ -1169,10 +1169,16 @@ class BaseGfTask(RuntimeMixin, BaseTask):
 
     # ------------------------------------------------------------------ 支援单位（第 9 章起，实录 2026-10-20）
     def _support_count(self):
-        """顶部「支援 2/3」→ (2, 3)；这一关没有支援单位返回 None。"""
-        boxes = self._ocr_panel(SUPPORT_COUNT_BOX)
-        count = parse_support_count([b.name for b in boxes])
-        self.log_info(f"支援计数区文字: {[b.name for b in boxes]} -> {count}", notify=False)
+        """顶部「支援 2/3」→ (2, 3)；这一关没有支援单位返回 None；有「支援」行但数字被挡住，多读两帧仍读不到返回 (None, None)。"""
+        count = None
+        for attempt in range(3):
+            boxes = self._ocr_panel(SUPPORT_COUNT_BOX)
+            count = parse_support_count([b.name for b in boxes])
+            self.log_info(f"支援计数区文字: {[b.name for b in boxes]} -> {count}", notify=False)
+            if count != (None, None):
+                break
+            self.sleep(0.3)
+            self.next_frame()
         return count
 
     def _support_button(self):
@@ -1215,6 +1221,13 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             c["deployed"] = is_orange_check(self.frame, *c["check"])
         self.log_info(f"支援卡片 {len(cards)} 张，已部署 {sum(c['deployed'] for c in cards)} 张", notify=False)
         return cards
+
+    def _support_card_placed(self, card):
+        """部署后重新扫一遍卡片，同一位置的卡片是否打上了橙色勾。"""
+        for c in self._support_cards():
+            if abs(c["center"][0] - card["center"][0]) < 0.02 * self.width and abs(c["center"][1] - card["center"][1]) < 0.03 * self.height:
+                return c["deployed"]
+        return False
 
     def _click_support_card(self, card):
         self.click_relative(card["center"][0] / self.width, card["center"][1] / self.height, after_sleep=0.8)
@@ -1265,17 +1278,19 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         if count is None:
             return False
         n, m = count
-        if n >= m:
+        if n is not None and n >= m:
             self.log_info(f"支援单位已满 {n}/{m}", notify=False)
             return False
+        if n is None:
+            self.log_info("有「支援」行但计数被挡住读不到，按没上满处理，部署到没有可用卡片/支援点为止", notify=True)
         self.info_set("current_task", "部署支援单位")
         self.log_info(f"支援单位 {n}/{m}，开始部署", notify=True)
         self._click_support_tab("部署支援")
         tried = []
         min_gap = (0.03 * self.height) ** 2
         deployed = False
-        for _ in range(m * 3):
-            if n >= m:
+        for _ in range((m or 3) * 3):
+            if n is not None and n >= m:
                 break
             cards = self._support_cards()
             free = [c for c in cards if not c["deployed"]]
@@ -1316,10 +1331,16 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                     self.click(confirm, after_sleep=1.5)
                     self.next_frame()
                 new = self._support_count()
-                if new and new[0] > n:
-                    n = new[0]
+                if new and new[0] is not None and (n is None or new[0] > n):
+                    n, m = new
                     deployed = placed = True
                     self.log_info(f"已部署支援单位，{n}/{m}", notify=True)
+                    self._clear_selection()
+                    break
+                if new == (None, None) and self._support_card_placed(card):
+                    # 计数仍被挡住：这张卡片打上勾了也算成功
+                    deployed = placed = True
+                    self.log_info("已部署支援单位（计数读不到，按卡片勾选确认）", notify=True)
                     self._clear_selection()
                     break
                 self.log_info("点了「部署支援单位」但计数没涨，换下一个支援点", notify=True)
@@ -1515,6 +1536,10 @@ class BaseGfTask(RuntimeMixin, BaseTask):
                 self.next_frame()
                 still = self.ocr(match="作战开始", box=self.box.bottom)
                 if not still:
+                    break
+                if self.ocr(match=re.compile("还有可部署")):
+                    # 实录 2026-10-20：「还有可部署的单位」确认框是半透明的，后面的「作战开始」还能 OCR 到；
+                    # 这不是没点上，交给下面的 skip_dialogs 点确认
                     break
                 self.log_info("点了作战开始但还在部署界面，清掉选中后再点", notify=True)
                 self.debug_shot("battle_start_retry")

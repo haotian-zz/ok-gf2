@@ -542,7 +542,11 @@ tutorial_text_re = re.compile(r"可露凯|通信中|点击.*部署|提醒|提示
 
 
 def parse_support_count(names):
-    """顶部「支援 2/3」那一行的 OCR 文字 → (2, 3)；没有「支援」标签或没有计数返回 None。"""
+    """
+    顶部「支援 2/3」那一行的 OCR 文字 → (2, 3)。
+    没有「支援」标签（普通关卡）返回 None；有标签但计数读不出来返回 (None, None)——
+    实录 2026-10-20：继续前进后的第 2、3 波，「0/3」被半透明面板后面的敌人名字/血条挡住，只读到「支援」「3」。
+    """
     if not any(support_count_label_re.search(n) for n in names):
         return None
     for n in names:
@@ -550,7 +554,7 @@ def parse_support_count(names):
         m = re.search(r"(\d)\s*[/|\\]\s*(\d)", n) or re.fullmatch(r"(\d)[1lI](\d)", n.strip())
         if m and int(m.group(2)) >= int(m.group(1)):
             return int(m.group(1)), int(m.group(2))
-    return None
+    return None, None
 
 
 def tutorial_step(names):
