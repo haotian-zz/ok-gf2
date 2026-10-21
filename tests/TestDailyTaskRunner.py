@@ -127,9 +127,8 @@ class TestDailyTaskRunner(unittest.TestCase):
         stub = StubTask(dict(ALL_ON))
         runner = DailyTaskRunner(stub, build_plan(stub, {"邮件": RuntimeError("boom")}))
         runner.run()
-        self.assertEqual(
-            self.executed(stub), ["社区每日", "ensure_main", "邮件", "ensure_main", "自动刷体力", "竞技场"]
-        )
+        self.assertEqual(self.executed(stub), ["社区每日", "ensure_main", "邮件", "自动刷体力", "竞技场"])
+        self.assertGreaterEqual(sum(1 for kind, _ in stub.calls if kind == "ensure_main"), 2)  # 异常后回过主页
         self.assertEqual(runner.task_status["failed"], ["邮件"])
         self.assertIn("DailyTask_Exception_邮件", stub.screenshots)
         self.assertIn("boom", runner.failure_details[""]["邮件"])

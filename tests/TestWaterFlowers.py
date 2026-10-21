@@ -257,6 +257,7 @@ class FoodFlowResultTest(unittest.TestCase):
         task.box.bottom_right = "bottom_right"
         task.wait_ocr.return_value = object()
         task.wait_click_ocr.side_effect = [True, False]
+        task._dismiss_already_active.return_value = False  # 没弹「已有 xx 生效中，是否确认更换」
         enter_func = Mock()
 
         result = do_food_flow(
