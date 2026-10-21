@@ -5,7 +5,7 @@ from collections import Counter
 import cv2
 from ok import Logger
 
-from src.core.BaseGfTask import BaseGfTask, chapter_select_re, map_re, nav_tabs_re, pop_ups
+from src.core.BaseGfTask import BaseGfTask, BattleLost, chapter_select_re, map_re, nav_tabs_re, pop_ups
 from src.core.stage_card import MEDAL_BOX, has_clear_badge, medal_re, parse_medals
 from src.image.hsv_config import HSVRange as hR
 
@@ -621,7 +621,7 @@ class ClearMapTask(BaseGfTask):
                 return True
             if self.find_boxes(boxes, match="任务失败"):
                 self.debug_shot("resume_failed", boxes)
-                raise Exception("任务失败, 没打过!")
+                raise BattleLost("任务失败, 没打过!")
             if confirm := self.find_boxes(boxes, match=self.fix_match_regex(["确认", "确认结算"])):
                 self.click(confirm, after_sleep=2)
                 continue
@@ -765,11 +765,22 @@ class ClearMapTask(BaseGfTask):
             self.click(action, after_sleep=2)
             # 看完/打完游戏可能退回地图、章节选择页，甚至停在剧情或结算上；结束条件宽一点，剩下的交给 ensure_map
             if status == "challenge":
-                self.auto_battle(
-                    end_match=BACK_TO_MAP,
-                    has_dialog=True,
-                    need_click_auto=self.config.get("战斗内点击自动", False),
-                )
+                try:
+                    self.auto_battle(
+                        end_match=BACK_TO_MAP,
+                        has_dialog=True,
+                        need_click_auto=self.config.get("战斗内点击自动", False),
+                    )
+                except BattleLost:
+                    # 英雄难度是可选的高难度，打不过很正常，跳过这关接着推（实录 2026-10-21 12.5 章 LZ-1-5 全员撤离）；
+                    # 普通 / 困难打输说明阵容有问题，照旧停下
+                    if not self.hero_mode:
+                        raise
+                    attempts[name] = STAGE_MAX_ATTEMPTS
+                    self.log_info(f"{name} 英雄难度打输了，这次推图不再打它，接着推别的关", notify=True)
+                    handled.update(group)
+                    self.close_map_panel()
+                    continue
             else:
                 self.skip_dialogs(end_match=BACK_TO_MAP, raise_if_not_found=False)
             played += 1

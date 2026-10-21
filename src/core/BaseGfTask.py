@@ -93,6 +93,10 @@ GAME_LAUNCH_MAIN_TIMEOUT = 150  # 秒：从拉起游戏到进入主页的上限�
 GAME_FRESH_SECONDS = 180  # 秒：游戏进程比这更新，就当成刚被框架拉起、还停在启动/标题页，要走一遍进主页
 
 
+class BattleLost(Exception):
+    """战斗结算是「任务失败」。"""
+
+
 def _with_game_started(run):
     """给任务的 run 套一层：先 ensure_game_started（游戏没开就拉起、标题页点进主页），再跑任务本身。"""
 
@@ -1501,7 +1505,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         if not results:
             raise Exception("自动战斗异常")
         if results[0].name == "任务失败":
-            raise Exception("任务失败, 没打过!")
+            raise BattleLost("任务失败, 没打过!")
         if clicked_continue:
             self.log_info("检测到继续前进，点击后开启新一轮自动战斗", notify=True)
             self.auto_battle(
