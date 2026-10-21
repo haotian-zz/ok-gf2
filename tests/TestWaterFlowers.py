@@ -258,6 +258,7 @@ class FoodFlowResultTest(unittest.TestCase):
         task.wait_ocr.return_value = object()
         task.wait_click_ocr.side_effect = [True, False]
         task._dismiss_already_active.return_value = False  # 没弹「已有 xx 生效中，是否确认更换」
+        task.ocr.return_value = []  # 没找到第二个按钮时会记录画面文字
         enter_func = Mock()
 
         result = do_food_flow(
