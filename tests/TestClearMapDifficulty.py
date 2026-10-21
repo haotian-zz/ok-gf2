@@ -243,13 +243,18 @@ class EnsureDifficultyTest(unittest.TestCase):
         self.assertEqual((t.page, t.difficulty, t.chapter), ("map", "困难", 4))
         self.assertEqual(t.clicks, ["困难", "困难"])
 
-    def test_buttons_missing_raises_without_leaving_map(self):
-        # 实录进 14.0：按钮还没出来时不能当成「难度不对」退回章节选择页
+    def test_no_buttons_means_normal_only(self):
+        # 实录 14.0 章：地图右下只有「英雄难度」，没有「普通 / 困难」，推普通就原地继续
         t = FakeTask("普通")
-        t.page = "loading"
-        with self.assertRaises(Exception):
-            t.ensure_difficulty("普通")
-        self.assertEqual(t.page, "loading")
+        t.page = "normal_only"
+        t.ensure_difficulty("普通")
+        self.assertEqual((t.page, t.clicks), ("normal_only", []))
+
+    def test_no_buttons_and_want_hard_goes_to_chapter_select(self):
+        t = FakeTask("普通")
+        t.page = "normal_only"
+        t.ensure_difficulty("困难")
+        self.assertEqual((t.page, t.difficulty), ("map", "困难"))
 
     def test_back_to_normal(self):
         t = FakeTask("困难")

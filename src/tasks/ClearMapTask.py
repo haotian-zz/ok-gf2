@@ -426,10 +426,10 @@ class ClearMapTask(BaseGfTask):
         self.ensure_difficulty(self.config.get("难度") or "普通")
         self.hero_mode = self.ensure_hero(bool(self.config.get("英雄难度", False)))
 
-    def read_difficulty(self, time_out=5):
+    def read_difficulty(self, time_out=3):
         """
-        右下角难度按钮 -> (当前选中的难度, 按钮框)。
-        刚进章节时按钮还在入场动画里（实录 2026-10-21 进 14.0：只读到「英雄难度」），先等按钮出来、再稳半秒重读。
+        右下角难度按钮 -> (当前选中的难度, 按钮框)。先等按钮出来（刚进章节有入场动画）、再稳半秒重读。
+        没有困难模式的章节地图上根本没有「普通 / 困难」按钮（实录 2026-10-21 14.0 章：右下只有「英雄难度」），返回 (None, [])。
         """
         if self.wait_ocr(box="bottom_right", match=difficulty_re, time_out=time_out, raise_if_not_found=False):
             self.sleep(0.5)
@@ -443,11 +443,8 @@ class ClearMapTask(BaseGfTask):
         就回章节选择页切难度，点「确认」进那个难度当前的章节。
         """
         current, boxes = self.read_difficulty()
-        if current == want:
-            return
-        if not boxes:
-            self.debug_shot("difficulty_missing")
-            raise Exception("选关地图右下角没找到「普通 / 困难」按钮")
+        if current == want or (not boxes and want == "普通"):
+            return  # 没有难度按钮 = 本章只有普通
         self.log_info(f"当前是「{current or '?'}」难度，切到「{want}」", notify=True)
         if target := [b for b in boxes if b.name.strip() == want]:
             self.click(target, after_sleep=2)
