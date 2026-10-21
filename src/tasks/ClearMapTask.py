@@ -4,12 +4,11 @@ from collections import Counter
 
 from ok import Logger
 
-from src.core.BaseGfTask import pop_ups, BaseGfTask, map_re, chapter_select_re, nav_tabs_re
+from src.core.BaseGfTask import BaseGfTask, chapter_select_re, map_re, nav_tabs_re, pop_ups
 from src.core.stage_card import MEDAL_BOX, has_clear_badge, medal_re, parse_medals
 from src.image.hsv_config import HSVRange as hR
 
 logger = Logger.get_logger(__name__)
-
 
 
 PANEL_WORDS = ["特殊奖励", "观看", "挑战", "完成前置关卡解锁"]
@@ -37,8 +36,13 @@ MAP_DRAG_Y = 0.2  # 拖地图时按住的高度：卡片都在 0.3~0.75，这一
 # 打完/看完一关后「回到选关」的标志：地图卡片、章节选择页的「章节进度」、或作战页顶上的页签。
 # 实录 2026-10-21 15.0 章：看完剧情落在章节选择页，「章节进度」四个字 OCR 没读到、页签读到了，白等了 120 秒
 BACK_TO_MAP = [map_re, chapter_select_re, nav_tabs_re]
-STATUS_TEXT = {"cleared": "已通关（面板没有首通奖励）, 跳过", "locked": "未解锁, 先推其他关卡", "nopanel": "没读到关卡面板, 跳过",
-               "unknown": "面板反复读不到按钮, 跳过", "skip": "跳过"}
+STATUS_TEXT = {
+    "cleared": "已通关（面板没有首通奖励）, 跳过",
+    "locked": "未解锁, 先推其他关卡",
+    "nopanel": "没读到关卡面板, 跳过",
+    "unknown": "面板反复读不到按钮, 跳过",
+    "skip": "跳过",
+}
 
 
 class ChapterLocked(Exception):
@@ -66,7 +70,9 @@ def current_and_next_chapter(boxes, width, height):
     badges = [
         b
         for b in boxes
-        if b.x <= CHAPTER_BADGE_MAX_X * width and chapter_badge_re.search(b.name or "") and not (b.name or "").strip().startswith("C")
+        if b.x <= CHAPTER_BADGE_MAX_X * width
+        and chapter_badge_re.search(b.name or "")
+        and not (b.name or "").strip().startswith("C")
     ]
     if badges:
         by = badges[0].y + badges[0].height / 2
@@ -108,10 +114,15 @@ def chapter_signature(boxes, width, height):
     选中了哪一章的指纹：右侧「57%」「27/48」两个数字 + 左边角标所在行。
     点锁着的章节什么都不变；简介那句话 OCR 时有时无句号，不拿来比。
     """
-    nums = tuple(sorted((b.name or "").replace(" ", "") for b in boxes if b.x > 0.6 * width and chapter_progress_re.match(b.name or "")))
+    nums = tuple(
+        sorted(
+            (b.name or "").replace(" ", "")
+            for b in boxes
+            if b.x > 0.6 * width and chapter_progress_re.match(b.name or "")
+        )
+    )
     current, _ = current_and_next_chapter(boxes, width, height)
     return nums, (current.name if current else None)
-
 
 
 def button_kind(text):
@@ -200,7 +211,9 @@ class ClearMapTask(BaseGfTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.name = "推图"
-        self.description = "停在任意关卡页面或章节选择页启动即可，先回章节起点从左到右推完未通关的关卡，推完自动进下一章"
+        self.description = (
+            "停在任意关卡页面或章节选择页启动即可，先回章节起点从左到右推完未通关的关卡，推完自动进下一章"
+        )
         self.default_config.update(
             {
                 "普通OCR": True,
@@ -257,10 +270,7 @@ class ClearMapTask(BaseGfTask):
         面板是带动画弹出来的，「特殊奖励」往往比底部按钮先出现，所以看到奖励却没看到按钮时多读几帧再下结论。
         """
         self.click(card, after_sleep=1)
-        boxes = (
-            self.wait_ocr(box="right", match=PANEL_WORDS, time_out=3, log=True)
-            or []
-        )
+        boxes = self.wait_ocr(box="right", match=PANEL_WORDS, time_out=3, log=True) or []
         status, action = self.panel_status(boxes)
         for _ in range(3):
             if status != "unknown":
@@ -376,7 +386,13 @@ class ClearMapTask(BaseGfTask):
                 return False
         self.log_info("回到了章节选择页，点确认进回章节继续推", notify=True)
         self.debug_shot("back_on_chapter_select")
-        if not self.wait_click_ocr(match=self.fix_match_regex(["确认"]), box="bottom_right", time_out=5, after_sleep=3, raise_if_not_found=False):
+        if not self.wait_click_ocr(
+            match=self.fix_match_regex(["确认"]),
+            box="bottom_right",
+            time_out=5,
+            after_sleep=3,
+            raise_if_not_found=False,
+        ):
             return False
         self.skip_dialogs(end_match=map_re, time_out=120, has_dialog=True, raise_if_not_found=False)
         return True
@@ -434,7 +450,9 @@ class ClearMapTask(BaseGfTask):
                 or self.find_boxes(boxes, match="继续前进")
             ):
                 self.log_info("当前在部署界面或战斗中，先打完这一关再继续推图", notify=True)
-                self.auto_battle(end_match=BACK_TO_MAP, has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False))
+                self.auto_battle(
+                    end_match=BACK_TO_MAP, has_dialog=True, need_click_auto=self.config.get("战斗内点击自动", False)
+                )
                 self.reenter_from_chapter_select()
                 self.close_map_panel()
                 return True
@@ -558,7 +576,9 @@ class ClearMapTask(BaseGfTask):
             status, action = self.inspect_card(card, name)
             if status == "unknown" and unknown_tries[name] < 2:
                 unknown_tries[name] += 1
-                self.log_info(f"{name} 面板上没读到挑战/观看按钮，关掉面板重读第 {unknown_tries[name]} 次", notify=False)
+                self.log_info(
+                    f"{name} 面板上没读到挑战/观看按钮，关掉面板重读第 {unknown_tries[name]} 次", notify=False
+                )
                 self.close_map_panel()
                 continue
             if status in ("challenge", "watch") and attempts[name] >= STAGE_MAX_ATTEMPTS:
@@ -652,6 +672,7 @@ class ClearMapTask(BaseGfTask):
             ordered = self.scroll_map(-1, ordered)
             if ordered is None:
                 return
+
 
 def merge_maps(maps, x_threshold=40, y_threshold=40):
     merged = []  # 存最终的 map 对象

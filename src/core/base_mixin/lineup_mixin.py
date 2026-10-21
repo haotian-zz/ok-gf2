@@ -77,7 +77,11 @@ class LineupMixin:
                 self._borrowed_support = want.name
             # 我方卡片点了一次没上去就换下一张（多半是这张卡本身的问题）；撤人/上助战可以再试一次
             exclude = {(k[1], k[2]) for k in failed if k[0] == "deploy" and not k[3]}
-            steps = [s for s in plan_lineup(state, want, self._name_like, exclude) if failed[self._step_key(s)] < STEP_MAX_FAILS]
+            steps = [
+                s
+                for s in plan_lineup(state, want, self._name_like, exclude)
+                if failed[self._step_key(s)] < STEP_MAX_FAILS
+            ]
             self.log_info(
                 f"阵容第 {rnd + 1} 轮：{state.used()}/{state.capacity}，我方在场 "
                 f"{[u.name for u in state.own_deployed()]}，场上助战 {[u.name for u in state.supports_on_map]}，"
@@ -111,7 +115,9 @@ class LineupMixin:
             self.debug_shot("support_not_deployed")
         full = state is not None and state.capacity is not None and state.used() >= state.capacity
         if not full:
-            self.log_info(f"阵容没上满（{state.used() if state else '?'}/{state.capacity if state else '?'}）", notify=True)
+            self.log_info(
+                f"阵容没上满（{state.used() if state else '?'}/{state.capacity if state else '?'}）", notify=True
+            )
         self.debug_shot("lineup_done")
         return full
 
@@ -261,7 +267,9 @@ class LineupMixin:
                 return False
             if not u.name and name:
                 self._learn_card(card, name)
-            ok = self._place_selected(f"我的人形 {name}（战力 {u.power}，{step.why}）", name, before=before, reselect=reselect)
+            ok = self._place_selected(
+                f"我的人形 {name}（战力 {u.power}，{step.why}）", name, before=before, reselect=reselect
+            )
         if ok and self._freed_tiles:
             self._freed_tiles.pop(0)
         return ok

@@ -14,10 +14,10 @@ from src.tasks.daily.daily_activity_mixin import DailyActivityMixin
 from src.tasks.daily.daily_battle_mixin import DailyBattleMixin
 from src.tasks.daily.daily_common_mixin import DailyCommonMixin
 from src.tasks.daily.daily_public_mixin import DailyPublicMixin
+from src.tasks.daily.daily_record import DailyRecord
 from src.tasks.daily.daily_reward_mixin import DailyRewardMixin
 from src.tasks.daily_summary import create_task_summary_report, open_local_path_with_default_app
 from src.tasks.DailyTaskRunner import DailyTaskRunner
-from src.tasks.daily.daily_record import DailyRecord
 
 
 class DailyTask(

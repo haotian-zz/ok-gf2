@@ -61,7 +61,11 @@ class DismissNoticeTest(unittest.TestCase):
 
     def test_rank_up_notice_is_closed_with_esc(self):
         task = self.make_task()
-        boxes = [box("03"), box("您已晋升至新锐·三"), box("首次晋升至该段位可获得相应补给，补给将通过邮件发放，请注意查收。")]
+        boxes = [
+            box("03"),
+            box("您已晋升至新锐·三"),
+            box("首次晋升至该段位可获得相应补给，补给将通过邮件发放，请注意查收。"),
+        ]
         self.assertTrue(dismiss_notice(task, boxes))
         task.back.assert_called_once()
         task.debug_shot.assert_called_once()
@@ -87,7 +91,9 @@ class ConfirmBattleResultTest(unittest.TestCase):
         return task
 
     def test_victory_screen_clicks_confirm(self):
-        task = self.make_task([box("03"), box("对战胜利"), box("积分：34/51"), box("作战奖励"), box("伤害统计"), box("确认")])
+        task = self.make_task(
+            [box("03"), box("对战胜利"), box("积分：34/51"), box("作战奖励"), box("伤害统计"), box("确认")]
+        )
         self.assertTrue(confirm_battle_result(task))
         self.assertEqual(task.click.call_args.args[0][0].name, "确认")
 

@@ -36,7 +36,9 @@ class PureFunctionTest(unittest.TestCase):
     def test_absolute_point_maps_desktop_to_16bit(self):
         self.assertEqual(absolute_point(0, 0, (0, 0, 2560, 1440)), (0, 0))
         self.assertEqual(absolute_point(1280, 720, (0, 0, 2560, 1440)), (32768, 32768))
-        self.assertEqual(absolute_point(2559, 1439, (0, 0, 2560, 1440)), (round(2559 * 65535 / 2560), round(1439 * 65535 / 1440)))
+        self.assertEqual(
+            absolute_point(2559, 1439, (0, 0, 2560, 1440)), (round(2559 * 65535 / 2560), round(1439 * 65535 / 1440))
+        )
 
     def test_absolute_point_rejects_outside_desktop(self):
         for x, y in ((2560, 0), (-1, 0), (0, 1440)):

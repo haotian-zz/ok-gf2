@@ -76,7 +76,9 @@ class XunluChoiceBoxTest(unittest.TestCase):
     def test_record_keeps_specific_reason(self):
         task = Mock()
         record(task, "巡录奖励", "待核查：「标准武器自选礼箱」需要手动选择，脚本已取消未替你选")
-        task.info_set.assert_called_once_with("巡录奖励", "待核查：「标准武器自选礼箱」需要手动选择，脚本已取消未替你选")
+        task.info_set.assert_called_once_with(
+            "巡录奖励", "待核查：「标准武器自选礼箱」需要手动选择，脚本已取消未替你选"
+        )
         record(task, "巡录奖励", "待核查")
         task.info_set.assert_called_with("巡录奖励", "待核查：缺少领取结果证据")
 

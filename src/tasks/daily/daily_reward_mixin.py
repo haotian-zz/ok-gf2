@@ -219,11 +219,17 @@ class DailyRewardMixin:
                 self.log_info("未看到获得道具，巡录领取结果待核查")
                 return "待核查"
             if any(choice_title.search(title.name) for title in titles):
-                box_name = next((b.name for b in self.ocr(box=self.box_of_screen(0, 0, 1, 0.3)) if "自选" in b.name), "自选礼箱")
+                box_name = next(
+                    (b.name for b in self.ocr(box=self.box_of_screen(0, 0, 1, 0.3)) if "自选" in b.name), "自选礼箱"
+                )
                 self.log_info(f"巡录奖励弹出「{box_name}」自选框，脚本不替你选武器，点「取消」留在背包里", notify=True)
                 self.screenshot("xunlu_choice_box")
                 if not self.wait_click_ocr(
-                    match=[re.compile(r"^取消$")], box=self.box_of_screen(0, 0.55, 1, 0.95), time_out=4, raise_if_not_found=False, after_sleep=1
+                    match=[re.compile(r"^取消$")],
+                    box=self.box_of_screen(0, 0.55, 1, 0.95),
+                    time_out=4,
+                    raise_if_not_found=False,
+                    after_sleep=1,
                 ):
                     self.log_error("自选框上没找到「取消」按钮，领取未完成")
                     return False
