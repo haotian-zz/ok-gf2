@@ -22,7 +22,9 @@ config = {
     "windows": {  # Windows游戏请填写此设置
         "exe": ["GF2_Exilium.exe"],  # 新版统一使用 list
         "hwnd_class": "UnityWndClass",
-        "interaction": GfInteraction,  # 鼠标走 Interception 会话鼠标，绑不到时退回 Genshin(PostMessage)，见 src/core/gf_interaction.py
+        # 列表：Qt「捕获」页可以在两者之间切换（默认第一项）。GfInteraction 鼠标走 Interception 会话鼠标，绑不到时自动退回
+        # PostMessage，见 src/core/gf_interaction.py；必须写成列表，写成单个类时 Qt「捕获」页的输入方式列表会报 len(type)
+        "interaction": [GfInteraction, "Genshin"],
         "capture_method": ["WGC", "BitBlt_RenderFull"],
         # Windows版本支持的话, 优先使用WGC, 否则使用BitBlt_Full. 支持的capture有 BitBlt, WGC, BitBlt_RenderFull, DXGI
         "check_hdr": True,  # 当用户开启AutoHDR时候提示用户, 但不禁止使用
