@@ -58,7 +58,7 @@ DIFFICULTY_MIN_FILL = 0.3
 # 开着时关卡面板顶上标「英雄难度」、没有「特殊奖励」，卡片的对勾和勋章也按英雄难度单独算。
 HERO_FROM_CHAPTER = 11
 hero_button_re = re.compile(r"英雄难度")
-hero_state_re = re.compile(r"^(开启中|未开启)$")
+hero_state_re = re.compile(r"开启中|未开启")  # 不锚定：拨完开关那几帧 OCR 可能把旁边的图标连进来
 HERO_SWITCH_DX = 0.088  # 拨动开关中心在状态文字中心右边多远（按画面高）
 chapter_no_re = re.compile(r"(\d{1,2})\s*\.\s*\d")
 
@@ -474,12 +474,17 @@ class ClearMapTask(BaseGfTask):
             return False
         self.click(button, after_sleep=1.5)
         on = None
-        for _ in range(3):
-            state = self.wait_ocr(box="bottom", match=hero_state_re, time_out=3, raise_if_not_found=False)
+        misses = 0
+        for _ in range(4):
+            state = self.wait_ocr(box="bottom", match=hero_state_re, time_out=5, log=True, raise_if_not_found=False)
             if not state:
-                self.debug_shot("hero_dialog")
-                raise Exception("英雄难度窗口里没读到「开启中 / 未开启」")
-            on = state[0].name.strip() == "开启中"
+                # 实录 2026-10-21 12.0 章：拨完开关后 3 秒没读到状态文字，截图里其实已经是「开启中」，再读一次
+                misses += 1
+                if misses >= 2:
+                    self.debug_shot("hero_dialog")
+                    raise Exception("英雄难度窗口里没读到「开启中 / 未开启」")
+                continue
+            on = "开启中" in state[0].name
             if on == want:
                 break
             self.log_info(f"英雄难度「{state[0].name}」，{'打开' if want else '关掉'}它", notify=True)

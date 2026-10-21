@@ -273,6 +273,24 @@ class EnsureHeroTest(unittest.TestCase):
         with self.assertRaises(Exception):
             t.ensure_hero(True)
 
+    def test_state_missed_once_after_switch(self):
+        # 实录 12.0 章：拨完开关后那一次没读到状态文字，再读就是「开启中」
+        t = FakeTask(hero=False)
+        real = t.ocr
+        misses = iter([True])
+
+        def flaky(box=None, match=None, **kw):
+            if match is ns["hero_state_re"] and t.hero and next(misses, False):
+                return []
+            return real(box=box, match=match)
+
+        t.ocr = flaky
+        self.assertTrue(t.ensure_hero(True))
+
+    def test_state_text_with_icon_noise(self):
+        self.assertTrue(ns["hero_state_re"].search("开启中√"))
+        self.assertFalse(ns["hero_state_re"].search("英雄难度"))
+
     def test_switch_not_working_raises(self):
         t = FakeTask(hero=False, hero_switch_works=False)
         with self.assertRaises(Exception):
