@@ -21,6 +21,7 @@ EVENT_LIST_DRAG = (0.75, 0.35)  # 拖活动列表时按住的起止 x（相对�
 EVENT_LIST_Y = 0.45  # 拖列表的高度：卡片立绘中间
 EVENT_LIST_MAX_DRAGS = 12
 EVENT_MAX = 40  # 一次最多推多少个活动（防止死循环）
+EVENT_TABS = ("剧情", "物资")  # 活动地图右下的两个页签，各是一张关卡地图
 
 
 def _center(b):
@@ -133,12 +134,40 @@ class EventMapTask(ClearMapTask):
         self.log_info(f"往期活动推图完成, 本次推进 {total} 关", notify=True)
 
     def prepare_chapter(self):
-        """活动地图没有普通 / 困难、英雄难度；右下「剧情 / 物资」两个页签，推图只推「剧情」。"""
+        """活动地图没有普通 / 困难、英雄难度。"""
         self.close_map_panel()
         self.hero_mode = False
-        tab = self.ocr(box="bottom_right", match=re.compile(r"^剧\s*情$"))
-        if tab:
-            self.click(tab, after_sleep=1.5)
+
+    def clear_chapter(self):
+        """
+        活动地图右下有「剧情 / 物资」两个页签，各是一张关卡地图，两边的关卡都算进完成度：先推「剧情」再推「物资」。
+        实录 2026-10-22 狂想四重奏：剧情全推完完成度才 75%，剩下的是物资页签的 MF-1-1～（推荐等级 30）；
+        拂晓的回响刚进去时「物资」点了没反应（剧情没推到解锁），这种就跳过，下一轮再试。
+        """
+        total, locked = 0, []
+        for tab in EVENT_TABS:
+            if not self.switch_event_tab(tab):
+                continue
+            count, tab_locked = super().clear_chapter()
+            total += count
+            locked += tab_locked
+        return total, locked
+
+    def switch_event_tab(self, tab):
+        """切到右下的「剧情 / 物资」页签，返回切没切过去（地图上的关卡名变了才算）。"""
+        self.close_map_panel()
+        before = {b.name for b, _ in self.ensure_map()}
+        button = self.ocr(box="bottom_right", match=re.compile(rf"^{tab[0]}\s*{tab[1]}$"))
+        if not button:
+            self.log_info(f"活动地图右下没找到「{tab}」页签", notify=False)
+            return tab == EVENT_TABS[0]  # 没有页签的活动只有一张图，当作「剧情」
+        self.click(button, after_sleep=2)
+        after = {b.name for b, _ in self.ensure_map()}
+        if tab != EVENT_TABS[0] and after == before:
+            self.log_info(f"「{tab}」页签点了没反应（还没解锁），先不推", notify=True)
+            return False
+        self.log_info(f"推活动「{self.event_name or '?'}」的「{tab}」页签", notify=False)
+        return True
 
     def chapter_medals(self):
         # 活动地图左下角的「0/45」是活动代币收集进度，不是勋章
