@@ -83,15 +83,15 @@ HERO_SWITCH_DX = 0.088  # 拨动开关中心在状态文字中心右边多远（
 chapter_no_re = re.compile(r"(\d{1,2})\s*\.\s*\d")
 
 
-def difficulty_fill(frame, box, height):
-    """难度按钮文字周围彩色（实心按钮）像素的占比。"""
+def difficulty_fill(frame, box, height, min_s=90):
+    """难度按钮文字周围彩色（实心按钮）像素的占比；min_s 是算「彩色」的最低饱和度。"""
     cx, cy = box.x + box.width / 2, box.y + box.height / 2
     dx, dy = DIFFICULTY_FILL[0] * height, DIFFICULTY_FILL[1] * height
     region = frame[max(0, int(cy - dy)) : int(cy + dy), max(0, int(cx - dx)) : int(cx + dx)]
     if region.size == 0:
         return 0.0
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    return float(((hsv[..., 1] > 90) & (hsv[..., 2] > 70)).mean())
+    return float(((hsv[..., 1] > min_s) & (hsv[..., 2] > 70)).mean())
 
 
 def selected_difficulty(frame, boxes, height):

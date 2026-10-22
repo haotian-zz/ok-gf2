@@ -23,6 +23,7 @@ EVENT_LIST_Y = 0.45  # 拖列表的高度：卡片立绘中间
 EVENT_LIST_MAX_DRAGS = 12
 EVENT_MAX = 40  # 一次最多推多少个活动（防止死循环）
 EVENT_TABS = ("剧情", "物资")  # 活动地图右下的两个页签，各是一张关卡地图
+EVENT_TAB_MIN_S = 50  # 页签算「实心」的饱和度门槛：纪念日礼赞的选中按钮是灰绿色（S≈70），难度按钮用的 90 认不出
 
 
 def _center(b):
@@ -100,12 +101,12 @@ def event_title_on_map(boxes, width, height):
 def selected_event_tab(frame, boxes, height):
     """
     「剧情」「物资」哪个是选中的：选中的是实心彩色按钮（狂想四重奏橙色、拂晓的回响青色），没选中的灰底；都不像返回 None。
-    实测 2560x1440：选中 0.76～0.77，没选中 0。
+    实测 2560x1440（S>50）：选中 0.73～0.79（纪念日礼赞灰绿色按钮 0.73），没选中 0。
     """
     best, best_fill = None, DIFFICULTY_MIN_FILL
     for b in boxes:
         name = re.sub(r"\s", "", b.name or "")
-        if name in EVENT_TABS and (fill := difficulty_fill(frame, b, height)) > best_fill:
+        if name in EVENT_TABS and (fill := difficulty_fill(frame, b, height, EVENT_TAB_MIN_S)) > best_fill:
             best, best_fill = name, fill
     return best
 

@@ -127,16 +127,23 @@ class EventTabTest(unittest.TestCase):
         ns["cv2"] = cv2
         exec(compile(ast.Module(body=extra, type_ignores=[]), "ClearMapTask", "exec"), ns)
 
-    def frame(self, filled):
+    def frame(self, filled, color=(0, 110, 240)):
         img = np.full((H, W, 3), 60, np.uint8)  # 暗灰底
         x = 2128 if filled == "剧情" else 2379
-        img[1320:1395, x - 40 : x + 160] = (0, 110, 240)  # 橙色实心按钮（BGR）
+        img[1320:1395, x - 40 : x + 160] = color  # 默认橙色实心按钮（BGR）
         return img
 
     def test_filled_button_is_selected(self):
         tabs = boxes([("剧情", 2128, 1339), ("物资", 2379, 1339)])
         for want in ("剧情", "物资"):
             self.assertEqual(ns["selected_event_tab"](self.frame(want), tabs, H), want)
+
+    def test_muted_green_button_is_selected(self):
+        """实录 2026-10-22 纪念日礼赞：选中的「剧情」是灰绿色（HSV S≈70 V≈174），S>90 认不出，被当成切不过去先推了物资。"""
+        tabs = boxes([("剧情", 2128, 1339), ("物资", 2379, 1339)])
+        muted = cv2.cvtColor(np.uint8([[[60, 70, 174]]]), cv2.COLOR_HSV2BGR)[0, 0].tolist()
+        for want in ("剧情", "物资"):
+            self.assertEqual(ns["selected_event_tab"](self.frame(want, muted), tabs, H), want)
 
     def test_no_filled_button(self):
         img = np.full((H, W, 3), 60, np.uint8)
