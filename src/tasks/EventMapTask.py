@@ -77,16 +77,24 @@ def pick_event(cards, skip):
 
 
 def event_title_on_map(boxes, width, height):
-    """活动地图顶部正中：小字活动名在「活动剧情」上面一行。"""
+    """
+    活动地图顶部正中：小字活动名在「活动剧情」上面一行。同一行可能被 OCR 拆成几个框
+    （实录 2026-10-22「密米尔的返演·上篇」只读出「密米尔的返演」，上篇 / 下篇分不清），按 x 拼起来。
+    """
     cands = [
         b
         for b in boxes
         if b.y < 0.06 * height
-        and 0.35 * width < _center(b)[0] < 0.65 * width
-        and re.search(r"[一-鿿]{2,}", b.name or "")
+        and 0.3 * width < _center(b)[0] < 0.7 * width
+        and (b.name or "").strip()
         and not event_story_re.search(b.name or "")
     ]
-    return min(cands, key=lambda b: b.y).name.strip() if cands else None
+    if not cands:
+        return None
+    top = min(cands, key=lambda b: b.y)
+    line = sorted((b for b in cands if abs(_center(b)[1] - _center(top)[1]) < 0.015 * height), key=lambda b: b.x)
+    title = "".join(b.name.strip() for b in line)
+    return title if re.search(r"[\u4e00-\u9fff]{2,}", title) else None
 
 
 def selected_event_tab(frame, boxes, height):
@@ -308,7 +316,8 @@ class EventMapTask(ClearMapTask):
         if not hit:
             self.log_info(f"列表上没找到活动「{self.event_name}」", notify=True)
             return None
-        self.log_info(f"活动「{hit[0].name}」完成度 {hit[1]}%", notify=False)
+        self.event_name = hit[0].name.strip()  # 列表上的名字比地图顶上的小字可靠，之后都用它
+        self.log_info(f"活动「{self.event_name}」完成度 {hit[1]}%", notify=False)
         return hit[1]
 
     def reenter_from_chapter_select(self):

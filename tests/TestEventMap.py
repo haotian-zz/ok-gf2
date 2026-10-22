@@ -94,6 +94,13 @@ class EventListTest(unittest.TestCase):
         rows = [("狂想四重秦", 1213, 42), ("活动剧情", 1192, 79), ("MA-1-1", 968, 683)]
         self.assertEqual(event_title_on_map(boxes(rows), W, H), "狂想四重秦")
 
+    def test_title_split_into_two_boxes(self):
+        # 实录 2026-10-22：「密米尔的返演·上篇」只读出前半截，上篇被拆到另一个框
+        rows = [("·上篇", 1330, 45), ("密米尔的返演", 1170, 42), ("活动剧情", 1192, 79)]
+        title = event_title_on_map(boxes(rows), W, H)
+        self.assertEqual(title, "密米尔的返演·上篇")
+        self.assertFalse(same_event(title, "密米尔的返演·下篇"))
+
 
 try:
     import cv2
