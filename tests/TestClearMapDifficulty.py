@@ -45,6 +45,7 @@ consts = [
             "chapter_no_re",
             "chapter_select_words",
             "chapter_select_marks_re",
+            "LOCKED_WORDS",
         )
         for t in n.targets
     )
