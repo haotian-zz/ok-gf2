@@ -46,6 +46,7 @@ ns = {
     "nav_tabs_re": re.compile("剧情战役|模拟作战"),
 }
 ns["has_clear_badge"] = lambda frame, card, w, h: frame.badge(card)
+ns["BattleLost"] = type("BattleLost", (Exception,), {})
 exec(compile(ast.Module(body=consts + funcs + methods, type_ignores=[]), str(source), "exec"), ns)
 
 SCREEN = 2000  # 屏幕能看到的地图宽度（真实章节里相邻卡片相距不到一屏，造数据时也别超过 500）
@@ -68,6 +69,8 @@ class FakeChapter:
         self.flicker = False  # 屏幕边上的卡片 OCR 时有时无
         self.blind_scrolls = 0  # 接下来几次往右挪视野「没看到新卡片」（模拟某一遍提前以为扫到头了）
         self.misread = {}  # 某关的名字 OCR 每次读成不同的样子（轮流取）
+        self.lose = set()  # 打这些关会输（结算「任务失败」）
+        self.hero_mode = False
         self.aliases = {}
         self._tick = 0
         self.drags = 0
@@ -147,6 +150,9 @@ class FakeChapter:
 
     def _finish(self, **kw):
         name = self.aliases.get(self._pending, self._pending)
+        if name in self.lose:
+            self.played.append(name)
+            raise ns["BattleLost"]("任务失败, 没打过!")
         self.stages[name]["done"] = True
         self.played.append(name)
         self.view_left = self.camera_after.get(name, self.view_left)
@@ -162,6 +168,9 @@ class FakeChapter:
         return True
 
     def reenter_from_chapter_select(self):
+        return False
+
+    def open_campaign_from_main(self):
         return False
 
     def chapter_percent(self):
@@ -258,6 +267,38 @@ class ClearChapterTest(unittest.TestCase):
         game.badge_misses = Counter({"1-1": 5})
         game.clear_chapter()
         self.assertEqual(game.played, ["1-2"])  # 1-1 对勾漏看了也只是点开面板，面板说已通关就不打
+
+    def test_hero_mode_loss_skips_stage_and_continues(self):
+        # 实录 12.5 章英雄难度：LZ-1-5 全员撤离，跳过它接着推别的关
+        game = FakeChapter(
+            {
+                "1-1": {"x": 100, "done": False},
+                "Z-1": {"x": 400, "done": False, "needs": ["1-1"]},
+                "1-2": {"x": 700, "done": False, "needs": ["1-1"]},
+            }
+        )
+        game.hero_mode = True
+        game.lose = {"Z-1"}
+        count, locked = game.clear_chapter()
+        self.assertEqual(game.played.count("Z-1"), 1)
+        self.assertTrue(game.stages["1-2"]["done"])
+        self.assertEqual(count, 2)
+
+    def test_main_page_goes_through_campaign_without_esc(self):
+        # 实录 12.5 章：失败结算后回到游戏主页，点「战役推进」回去，主页上不按 ESC
+        game = FakeChapter({"1-1": {"x": 100, "done": True}})
+        game.blank = 1
+        calls = []
+        game.open_campaign_from_main = lambda: calls.append("campaign") or True
+        game.back = lambda after_sleep=0: calls.append("esc")
+        self.assertTrue(game.ensure_map())
+        self.assertEqual(calls, ["campaign"])
+
+    def test_normal_mode_loss_stops(self):
+        game = FakeChapter({"1-1": {"x": 100, "done": False}})
+        game.lose = {"1-1"}
+        with self.assertRaises(ns["BattleLost"]):
+            game.clear_chapter()
 
     def test_stage_that_never_shows_cleared_is_capped(self):
         game = FakeChapter({"1-1": {"x": 100, "done": False}, "1-2": {"x": 500, "done": False, "needs": ["1-1"]}})

@@ -93,6 +93,15 @@ GAME_LAUNCH_MAIN_TIMEOUT = 150  # 秒：从拉起游戏到进入主页的上限�
 GAME_FRESH_SECONDS = 180  # 秒：游戏进程比这更新，就当成刚被框架拉起、还停在启动/标题页，要走一遍进主页
 
 
+class BattleLost(Exception):
+    """战斗结算是「任务失败」。"""
+
+
+# 真的失败结算页底部有「重新挑战 / 战斗重演(9) / 确认」；战斗中途红色特效偶尔会被 OCR 读成「任务失败」
+# （实录 2026-10-21 16.0 章英雄难度 HZ-1-4：读到「任务失败」当打输跳过了，其实这关后来打赢了）
+failure_page_re = re.compile(r"重新挑战|战斗重演")
+
+
 def _with_game_started(run):
     """给任务的 run 套一层：先 ensure_game_started（游戏没开就拉起、标题页点进主页），再跑任务本身。"""
 
@@ -1266,6 +1275,10 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
             raise Exception(f"连续点击继续前进 {MAX_CONTINUE_STREAK} 次都没进入战斗，已停止")
         self.click_box(box, after_sleep=2)
 
+    def _is_failure_page(self):
+        """读到「任务失败」后核对：底部有「重新挑战 / 战斗重演」才是真的失败结算页。"""
+        return bool(self.wait_ocr(match=failure_page_re, box=self.box.bottom, time_out=3, raise_if_not_found=False))
+
     def _is_battle_frame(self, boxes):
         """
         判断当前帧是否为战斗中界面（存在「行动结束」或回合计数）。
@@ -1461,6 +1474,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
                         self.debug_shot("after_click_auto")
 
         clicked_continue = False
+        fake_failures = 0
         while results := self.skip_dialogs(
             # 实录 2026-10-20：真实输入下角落点击会把结算页点过去，等到的直接是选关页面，也算打完了
             end_match=[
@@ -1481,6 +1495,11 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
             if battle_over_on_map(results):
                 self.log_info("结算页已经过去，回到了选关页面 / 章节选择页", notify=False)
                 break
+            if results[0].name == "任务失败" and fake_failures < 20 and not self._is_failure_page():
+                fake_failures += 1
+                self.log_info("读到「任务失败」但没有失败结算页的按钮，当成战斗特效误读，继续等", notify=False)
+                self.debug_shot("fake_failure", results)
+                continue
             # 优先遍历所有结果找"继续前进"
             clicked = False
             if any(r.name != "继续前进" for r in results):
@@ -1505,7 +1524,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         if not results:
             raise Exception("自动战斗异常")
         if results[0].name == "任务失败":
-            raise Exception("任务失败, 没打过!")
+            raise BattleLost("任务失败, 没打过!")
         if clicked_continue:
             self.log_info("检测到继续前进，点击后开启新一轮自动战斗", notify=True)
             self.auto_battle(
