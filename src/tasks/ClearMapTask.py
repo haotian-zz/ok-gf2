@@ -50,11 +50,9 @@ CHAPTER_MAX_PASSES = 6  # 一章最多从头扫几遍（每遍推过关才会再
 STAGE_MAX_ATTEMPTS = 2  # 同一关一次推图里最多打几次
 ENSURE_MAP_TRIES = 4  # 看不到关卡时最多恢复几次
 PASS_MAX_STEPS = 300  # 一遍扫描最多处理多少步（防止死循环）
-# 补读空档：同一排已识别的关卡名之间空出画面宽的 GAP_MIN 以上，就把空档切成宽 GAP_TILE[0]、步长 GAP_TILE[1] 的小块，
-# 每块按深色字二值化再 OCR（整屏 OCR 检测不到浅底深字的小卡片，单独裁出来才读得到）；行高按关卡名中心上下 GAP_ROW 取
-GAP_MIN = 0.1
-GAP_TILE = (0.16, 0.08)
-GAP_ROW = (0.04, 0.05)
+# 切块补读：整屏 OCR 会把 2560 宽的画面缩小再检测，低对比的小字（浅底深字的「当前」剧情关、暗红底灰字的未解锁关）检测不到，
+# 单独裁出来就读得到。补读时把画面切成 列 x 行 块（相邻块各重叠 1/4，免得关卡名被切在两块中间）分别 OCR
+TILE_GRID = (3, 2)
 MAP_DRAG_Y = 0.2  # 拖地图时按住的高度：卡片都在 0.3~0.75，这一带是空白背景，不会点到卡片
 # 打完/看完一关后「回到选关」的标志：地图卡片、章节选择页的「章节进度」、或作战页顶上的页签。
 # 实录 2026-10-21 15.0 章：看完剧情落在章节选择页，「章节进度」四个字 OCR 没读到、页签读到了，白等了 120 秒
@@ -240,32 +238,16 @@ def canonical_name(name_group):
     return names[0] if names else None
 
 
-def card_gaps(maps, width, height):
-    """同一排已识别的关卡名之间（含屏幕左右边）够宽的空档，返回 [(x0, x1, y0, y1)]，可能夹着一张没读到名字的卡。"""
-    rows = []
-    for m in sorted(maps, key=lambda m: m.y):
-        cy = m.y + m.height / 2
-        row = next((r for r in rows if abs(r[0] - cy) < GAP_ROW[0] * height), None)
-        if row:
-            row[1].append(m)
-        else:
-            rows.append((cy, [m]))
-    gaps = []
-    for cy, ms in rows:
-        ms.sort(key=lambda m: m.x)
-        lefts = [0] + [m.x + m.width for m in ms]
-        rights = [m.x for m in ms] + [width]
-        y0, y1 = max(0, int(cy - GAP_ROW[0] * height)), min(height, int(cy + GAP_ROW[1] * height))
-        gaps += [(int(l), int(r), y0, y1) for l, r in zip(lefts, rights) if r - l >= GAP_MIN * width]
-    return gaps
-
-
-def gap_tiles(x0, x1, width):
-    """把空档 [x0, x1) 切成互相重叠的小块，返回每块的左端 x（块宽 GAP_TILE[0] * width，不出屏幕）。"""
-    tile, step = int(GAP_TILE[0] * width), int(GAP_TILE[1] * width)
-    last = max(0, min(x1, width) - tile)
-    starts = list(range(max(0, x0), last, step)) + [last]
-    return sorted(set(min(s, width - tile) for s in starts))
+def screen_tiles(width, height, cols=TILE_GRID[0], rows=TILE_GRID[1]):
+    """把画面切成 cols x rows 块、相邻块各重叠 1/4，返回 [(x, y, w, h)]。"""
+    tw, th = width // cols, height // rows
+    tiles = []
+    for r in range(rows):
+        for c in range(cols):
+            x0, y0 = max(0, c * tw - tw // 4), max(0, r * th - th // 4)
+            x1, y1 = min(width, (c + 1) * tw + tw // 4), min(height, (r + 1) * th + th // 4)
+            tiles.append((x0, y0, x1 - x0, y1 - y0))
+    return tiles
 
 
 def order_maps(maps, name_groups):
@@ -364,7 +346,7 @@ class ClearMapTask(BaseGfTask):
             }
         )
         self.processors = []
-        self.read_gaps = False  # 扫描时是否补读卡片空档（一遍推不动还有未解锁的关时才开，平时不多花 OCR）
+        self.read_tiles = False  # 扫描时是否切块补读（一遍推不动还有未解锁的关时才开；整屏一张卡都没读到时总会补读）
         self.hero_mode = False  # 当前章节是不是按英雄难度在推（影响面板判断：英雄难度的面板没有「特殊奖励」）
 
     # ------------------------------------------------------------------ 扫描
@@ -374,32 +356,29 @@ class ClearMapTask(BaseGfTask):
         maps = []
         for p in self.processors:
             maps.extend(self.ocr(match=map_re, log=True, frame_processor=p))
-        if self.read_gaps:
-            maps.extend(self.scan_gaps(maps))
+        if self.read_tiles or not maps:
+            maps.extend(self.scan_tiles(maps))
         maps, groups = merge_maps(maps, x_threshold=40 / 1920 * self.width, y_threshold=40 / 1080 * self.height)
         ordered = order_maps(maps, groups)
         self.log_debug(f"maps: {[m for m, _ in ordered]}")
         self.debug_shot("scan", [m for m, _ in ordered])
         return ordered
 
-    def scan_gaps(self, maps):
+    def scan_tiles(self, maps):
         """
-        补读已识别关卡之间空档里没读到名字的卡，只返回新位置上的关卡名。
-        实录 2026-10-22 驻足之地：「当前」剧情关 DS-1-1 是浅绿底深色字的卡片，三种 OCR 都没检测到，扫图一直当它不存在，
-        后面的 DA-1-7～1-9 一直「需要完成前置关卡」，完成度卡在 79%。单独裁出这张卡、按深色字二值化后读得出来。
+        把画面切块重新 OCR，补出整屏没读到名字的关卡卡片，只返回新位置上的。
+        实录 2026-10-22 驻足之地：「当前」剧情关 DS-1-1 是浅绿底深色字，整屏 OCR 时有时无，后面 DA-1-7～1-9 一直「需要完成前置关卡」；
+        瑞骋迎春至：未解锁的关是暗红底灰字，视野里全是这种关时一张卡都读不到，被当成不在地图上、走了回地图的恢复流程。
+        两种卡片单独裁出来都读得到。
         """
-        dark = self.make_hsv_isolator(hR.DARK_TEXT)
-        tile = int(GAP_TILE[0] * self.width)
         near_x, near_y = 0.05 * self.width, 0.03 * self.height
         found = []
-        for x0, x1, y0, y1 in card_gaps(maps, self.width, self.height):
-            for x in gap_tiles(x0, x1, self.width):
-                for b in self.ocr(box=Box(x, y0, tile, y1 - y0), match=map_re, frame_processor=dark) or []:
-                    known = maps + found
-                    if not any(abs(b.x - m.x) < near_x and abs(b.y - m.y) < near_y for m in known):
-                        found.append(b)
+        for x, y, w, h in screen_tiles(self.width, self.height):
+            for b in self.ocr(box=Box(x, y, w, h), match=map_re) or []:
+                if not any(abs(b.x - m.x) < near_x and abs(b.y - m.y) < near_y for m in maps + found):
+                    found.append(b)
         if found:
-            self.log_info(f"卡片空档里补读到关卡: {[b.name for b in found]}", notify=False)
+            self.log_info(f"切块补读到关卡: {[b.name for b in found]}", notify=False)
         return found
 
     # ------------------------------------------------------------------ 面板
@@ -789,15 +768,15 @@ class ClearMapTask(BaseGfTask):
             total += played
             self.log_info(f"第 {pass_no} 遍扫完：推了 {played} 关，未解锁 {sorted(locked) or '无'}", notify=False)
             if played == 0 and locked:
-                # 推不动但还有锁着的关：前置关可能是名字没读到的卡，补读卡片空档再扫一遍
-                self.log_info("还有未解锁的关、这遍又推不动，补读卡片之间的空档再扫一遍", notify=False)
-                self.read_gaps = True
+                # 推不动但还有锁着的关：前置关可能是名字没读到的卡，切块补读再扫一遍
+                self.log_info("还有未解锁的关、这遍又推不动，切块补读再扫一遍", notify=False)
+                self.read_tiles = True
                 try:
                     played, locked = self.chapter_pass(attempts)
                 finally:
-                    self.read_gaps = False
+                    self.read_tiles = False
                 total += played
-                self.log_info(f"补读空档扫完：推了 {played} 关，未解锁 {sorted(locked) or '无'}", notify=False)
+                self.log_info(f"切块补读扫完：推了 {played} 关，未解锁 {sorted(locked) or '无'}", notify=False)
             if played == 0:
                 break
         medals = self.chapter_medals()
