@@ -187,6 +187,10 @@ class FakeChapter:
     def chapter_medals(self):
         return None
 
+    def claim_chapter_reward(self):
+        self.reward_claims = getattr(self, "reward_claims", 0) + 1
+        return 0
+
     def close_map_panel(self):
         pass
 
@@ -341,6 +345,7 @@ class ClearChapterTest(unittest.TestCase):
         game.inspect_card = lambda card, name: opened.append(name) or ("cleared", None)
         played, locked = game.clear_chapter()
         self.assertEqual((played, locked, opened), (0, [], []))
+        self.assertEqual(1, game.reward_claims)  # 扫完一章领一次左下角的章节奖励
 
     def test_progress_check_catches_a_pass_that_ended_early(self):
         """实录 2026-10-20 12.5 章：某一遍中途视野没挪到右边就以为扫完了，又恰好那一遍没推关，漏了好几关。"""

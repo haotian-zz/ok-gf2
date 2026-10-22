@@ -10,6 +10,7 @@ import re
 from difflib import SequenceMatcher
 
 from src.core.BaseGfTask import map_re, nav_tabs_re
+from src.core.chapter_reward import card_has_badge, event_badges
 from src.tasks.ClearMapTask import DIFFICULTY_FILL, DIFFICULTY_MIN_FILL, ClearMapTask, campaign_re, difficulty_fill
 
 event_percent_re = re.compile(r"完\s*成\s*度\s*(\d{1,3})\s*%")
@@ -163,6 +164,11 @@ class EventMapTask(ClearMapTask):
         self.config_description["推完继续下一个活动"] = (
             "当前活动推完（或剩下的关都推不动）后，回往期活动列表进下一个完成度不到 100% 的活动继续推"
         )
+        self.default_config["看心智回溯"] = True
+        self.config_description["看心智回溯"] = (
+            "活动「剧情」页签左边有「心智回溯」（第 8 期起）时，把能看的剧情一条条播放（跳过）领抽卡资源\n"
+            "开着「推完继续下一个活动」时，推完还会把列表上右上角带「!」（奖励没领完）的活动逐个进去领章节奖励和心智回溯"
+        )
         self.event_name = None
         self.skipped_events = []  # 这次推过 / 推不动的活动，不再回头选
 
@@ -177,6 +183,7 @@ class EventMapTask(ClearMapTask):
             self.log_info(f"停在活动「{self.event_name or '?'}」的地图上，先推这个", notify=True)
         elif not self.enter_next_event():
             self.log_info("往期活动都推到 100% 了", notify=True)
+            self.collect_event_rewards()
             return
         total = 0
         for _ in range(EVENT_MAX):
@@ -191,8 +198,36 @@ class EventMapTask(ClearMapTask):
                 break
             if not self.enter_next_event():
                 self.log_info("没有完成度不到 100% 的往期活动了", notify=True)
+                self.collect_event_rewards()
                 break
         self.log_info(f"往期活动推图完成, 本次推进 {total} 关", notify=True)
+
+    def collect_event_rewards(self):
+        """
+        推完以后，把列表上卡片右上角带「!」（奖励没领完）的活动逐个进去：每个页签领章节奖励、看心智回溯。
+        实录 2026-10-22：第 11 期素银匿信起的活动都已 100%，章节奖励和心智回溯都没领，推图不会再进这些活动。
+        每个活动这次只进一次，领不掉的「!」（比如英雄难度的奖励）不会来回进。
+        """
+        if not (self.config.get("领取章节奖励", True) or self.config.get("看心智回溯", True)):
+            return
+        visited = []
+        for _ in range(EVENT_MAX):
+            self.info_set("current_task", "找奖励没领的往期活动")
+            if not self.open_event_list():
+                break
+            hit = self.find_event(badge_skip=visited)
+            if not hit:
+                break
+            title = hit[0]
+            visited.append(title.name.strip())
+            self.log_info(f"往期活动「{title.name}」卡片上有「!」（奖励没领完），进去领", notify=True)
+            self.click_event(title)
+            self.ensure_map()
+            for tab in EVENT_TABS:
+                if self.switch_event_tab(tab):
+                    self.claim_chapter_reward()
+                    self.watch_mind_replay()
+        self.log_info(f"往期活动奖励领完，进了 {len(visited)} 个活动: {visited}", notify=True)
 
     def prepare_chapter(self):
         """活动地图没有普通 / 困难、英雄难度。"""
@@ -210,6 +245,7 @@ class EventMapTask(ClearMapTask):
             if not self.switch_event_tab(tab):
                 continue
             count, tab_locked = super().clear_chapter()
+            self.watch_mind_replay()
             total += count
             locked += tab_locked
         return total, locked
@@ -315,9 +351,10 @@ class EventMapTask(ClearMapTask):
         self.sleep(1.5)
         return self.read_event_cards()
 
-    def find_event(self, want=None):
+    def find_event(self, want=None, badge_skip=None):
         """
-        从列表最左边往右找：want 为空找第一个完成度不到 100% 且没放弃过的活动，否则找名字是 want 的那个。
+        从列表最左边往右找：want 为空找第一个完成度不到 100% 且没放弃过的活动，否则找名字是 want 的那个；
+        给了 badge_skip（已进过的活动名）就找第一个卡片右上角带「!」、还没进过的活动。
         返回 (活动名框, 完成度) 或 None。
         """
         if want and (hit := next((c for c in self.read_event_cards() if same_event(c[0].name, want)), None)):
@@ -329,6 +366,17 @@ class EventMapTask(ClearMapTask):
         for _ in range(EVENT_LIST_MAX_DRAGS):
             if want:
                 hit = next((c for c in cards if same_event(c[0].name, want)), None)
+            elif badge_skip is not None:
+                badges = event_badges(self.frame, self.width, self.height)
+                hit = next(
+                    (
+                        c
+                        for c in cards
+                        if card_has_badge(c[0], badges, self.width)
+                        and not any(same_event(c[0].name, v) for v in badge_skip)
+                    ),
+                    None,
+                )
             else:
                 hit = pick_event(cards, self.skipped_events)
             if hit:

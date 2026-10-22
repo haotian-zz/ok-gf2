@@ -14,6 +14,7 @@ from src.core.BaseGfTask import (
     nav_tabs_re,
     pop_ups,
 )
+from src.core.base_mixin.chapter_reward_mixin import ChapterRewardMixin
 from src.core.stage_card import MEDAL_BOX, has_clear_badge, medal_re, parse_medals
 from src.image.hsv_config import HSVRange as hR
 
@@ -292,7 +293,7 @@ def revealed_new(before, after, direction, min_shift=40, same_tol=60):
     return min(new) < min(common_x) if direction < 0 else max(new) > max(common_x)
 
 
-class ClearMapTask(BaseGfTask):
+class ClearMapTask(ChapterRewardMixin, BaseGfTask):
     LINEUP_TASK = True  # 每关开战前都整理阵容（切编队、补满；借助战看开关）
 
     def __init__(self, *args, **kwargs):
@@ -310,6 +311,7 @@ class ClearMapTask(BaseGfTask):
                 "推完继续下一章": True,
                 "难度": "普通",
                 "英雄难度": True,
+                "领取章节奖励": True,
             }
         )
         self.config_type["难度"] = {"type": "drop_down", "options": list(DIFFICULTIES)}
@@ -342,6 +344,10 @@ class ClearMapTask(BaseGfTask):
                 "英雄难度": (
                     "11.0 及之后的章节开启游戏的「英雄难度」再推（没打过的关也直接按英雄难度打），关掉则确保游戏里也是关的\n"
                     "英雄难度下敌人等级按指挥官等级匹配、额外附加不利效果，更容易打输；11.0 之前的章节没有英雄难度，照常推"
+                ),
+                "领取章节奖励": (
+                    "每章（活动每个页签）推完后，点地图左下角的「可领取」把收集数奖励领掉\n"
+                    "还有「未完成」的档位会通知出来：多半是漏了关卡或有关卡没三星通关"
                 ),
             }
         )
@@ -787,6 +793,7 @@ class ClearMapTask(BaseGfTask):
             )
         elif medals:
             self.log_info(f"本章勋章 {medals[0]}/{medals[1]}，全部拿到", notify=False)
+        self.claim_chapter_reward()
         return total, sorted(locked)
 
     def finish_chapter(self):
