@@ -20,6 +20,7 @@ class DebugTask(BaseGfTask):
                 "点击坐标": "",
                 "按ESC次数": 0,
                 "按键": "",
+                "按键间隔": 1.5,
                 "截图并OCR": False,
             }
         )
@@ -30,6 +31,7 @@ class DebugTask(BaseGfTask):
                 "点击坐标": "非空时点击这个相对坐标，格式 x,y（0~1），如 0.3,0.5",
                 "按ESC次数": "点击之后再按几次 ESC",
                 "按键": "最后按这些键，逗号分隔，键:秒 表示按住多久，如 f2 或 w:1.5,e",
+                "按键间隔": "相邻两个按键之间等几秒（活动层走路调试用，0 = 松开马上按下一个）",
                 "截图并OCR": "把当前画面全部 OCR 一遍，文字写进日志，截图存到 screenshots/调试工具/",
             }
         )
@@ -51,11 +53,12 @@ class DebugTask(BaseGfTask):
             self.click_relative(x, y, after_sleep=1.5)
         for _ in range(int(self.config.get("按ESC次数") or 0)):
             self.back(after_sleep=1.5)
+        gap = float(self.config.get("按键间隔", 1.5))
         for item in (self.config.get("按键") or "").split(","):
             key, _, hold = item.strip().partition(":")
             if key:
                 self.log_info(f"按键 {key} {hold or 0.1}s", notify=True)
-                self.send_key(key, down_time=float(hold or 0.1), after_sleep=1.5)
+                self.send_key(key, down_time=float(hold or 0.1), after_sleep=gap)
         if self.config.get("截图并OCR"):
             self.next_frame()
             boxes = self.ocr()
