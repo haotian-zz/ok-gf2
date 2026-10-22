@@ -312,7 +312,11 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
 
     def _touch_progress(self):
         self._progress_ts = time.time()
-        frame = getattr(self.executor, "_frame", None)
+        try:
+            executor = self.executor
+        except AttributeError:  # 还没绑定执行器（单测桩、初始化早期）
+            return
+        frame = getattr(executor, "_frame", None)
         if frame is not None:
             self._last_frame = frame
 
@@ -1737,19 +1741,15 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         )
 
     def click_with_key(self, hold_key, result, delay1=1, delay2=0.5, after_sleep=0):
-        def start_task1():
-            self.send_key(key=hold_key, down_time=delay1)
-
-        def start_task2():
-            time.sleep(delay2)  # 控制任务2启动延迟
+        # 任务线程内执行，异常可传播且修饰键总会释放。
+        """Click while holding a modifier and guarantee its release on failure."""
+        try:
+            self.send_key_down(hold_key)
+            self.sleep(delay2)
             self.click(result)
-
-        t1 = threading.Thread(target=start_task1)
-        t2 = threading.Thread(target=start_task2)
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
+            self.sleep(max(0, delay1 - delay2))
+        finally:
+            self.send_key_up(hold_key)
         self.sleep(after_sleep)
 
     def wait_click_ocr(

@@ -89,6 +89,35 @@ class ActivityPanelTest(unittest.TestCase):
 
 
 class WaterFlowersTest(unittest.TestCase):
+    def test_progress_rewards_dialog_is_closed_before_cultivation_lookup(self):
+        """Verify progress rewards dialog is closed before cultivation lookup."""
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        method = next(
+            (
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "_dismiss_activity_progress_dialog"
+            ),
+            None,
+        )
+        self.assertIsNotNone(method, "missing progress dialog recovery")
+        local = {"re": re}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), local)
+        task = Mock()
+        task.box_of_screen.side_effect = lambda *bounds: bounds
+        task.wait_ocr.side_effect = [True, False]
+        self.assertTrue(local["_dismiss_activity_progress_dialog"](task))
+        task.back.assert_called_once_with(after_sleep=1)
+
+    def test_blocked_progress_dialog_stops_before_cultivation_search(self):
+        """Verify blocked progress dialog stops before cultivation search."""
+        task = Mock()
+        task._ensure_activity_panel.return_value = True
+        task._dismiss_activity_progress_dialog.return_value = False
+        self.assertEqual("待核查", water_flowers(task))
+        task.wait_ocr.assert_not_called()
+        task.wait_click_ocr.assert_not_called()
+
     def make_task(
         self,
         overview=False,
@@ -224,10 +253,13 @@ class WaterFlowersTest(unittest.TestCase):
 
 class FoodFlowResultTest(unittest.TestCase):
     def test_missing_second_button_reports_confirm_failure(self):
+        """Verify missing second button reports confirm failure."""
         task = Mock()
         task.box.bottom_right = "bottom_right"
-        task.wait_ocr.return_value = object()
+        task.wait_ocr.return_value = [SimpleNamespace(name="entry")]
         task.wait_click_ocr.side_effect = [True, False]
+        task._skip_active_food_buff.return_value = None  # 没弹「已有 xx 生效中，是否确认更换」
+        task.ocr.return_value = []  # 没找到第二个按钮时会记录画面文字
         enter_func = Mock()
 
         result = do_food_flow(
