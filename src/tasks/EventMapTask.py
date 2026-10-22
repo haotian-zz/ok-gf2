@@ -161,11 +161,18 @@ class EventMapTask(ClearMapTask):
         if not button:
             self.log_info(f"活动地图右下没找到「{tab}」页签", notify=False)
             return tab == EVENT_TABS[0]  # 没有页签的活动只有一张图，当作「剧情」
-        self.click(button, after_sleep=2)
-        after = {b.name for b, _ in self.ensure_map()}
-        if tab != EVENT_TABS[0] and after == before:
-            self.log_info(f"「{tab}」页签点了没反应（还没解锁），先不推", notify=True)
-            return False
+        # 实录 2026-10-22：关卡面板刚关、还在收起动画时点页签没生效，留在物资图上当剧情推了。地图没变就再点一次
+        for _ in range(2):
+            self.click(button, after_sleep=2)
+            after = {b.name for b, _ in self.ensure_map()}
+            if after != before:
+                break
+            self.sleep(1)
+        if after == before:
+            if tab != EVENT_TABS[0]:
+                self.log_info(f"「{tab}」页签点了没反应（还没解锁），先不推", notify=True)
+                return False
+            # 点「剧情」地图不变：本来就在剧情页签（物资没解锁时只能停在剧情）
         self.log_info(f"推活动「{self.event_name or '?'}」的「{tab}」页签", notify=False)
         return True
 
