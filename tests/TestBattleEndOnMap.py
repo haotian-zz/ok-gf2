@@ -31,6 +31,8 @@ consts = [
             "challenge_button_re",
             "nav_tabs_re",
             "chapter_select_re",
+            "story_exit_re",
+            "story_blank_re",
         )
         for t in n.targets
     )
@@ -154,6 +156,24 @@ class SkipDialogsOnMapTest(unittest.TestCase):
         )
         self.assertEqual([b.name for b in result], ["9-7"])
         task.click_relative.assert_not_called()
+
+
+class StoryExitPageTest(unittest.TestCase):
+    """实录 2026-10-22 密米尔的返演·下篇 PS-1-7：「演算完成」页只有「终止覆写」，之后是「点击空白处继续」。"""
+
+    def make_task(self, pages):
+        task = SkipDialogsOnMapTest.make_task(self, [])
+        task.ocr.side_effect = lambda *a, **k: pages.pop(0) if len(pages) > 1 else pages[0]
+        return task
+
+    def test_exit_button_then_blank_then_map(self):
+        exit_page = [box("掩码列表"), box("演算完成"), box("LUSTRATIO"), box("终止覆写")]
+        text_page = [box("终止码演算"), box("佩莉，我们来接你了。")]
+        task = self.make_task([exit_page, text_page, [box("PS-1-7"), box("PA-1-11")]])
+        result = skip_dialogs(task, end_match=[map_re], time_out=5, has_dialog=True, raise_if_not_found=True)
+        self.assertEqual([b.name for b in result], ["PS-1-7", "PA-1-11"])
+        self.assertEqual(task.click.call_args_list[0].args[0][0].name, "终止覆写")
+        task.click_relative.assert_called_once_with(0.5, 0.6, after_sleep=2)
 
 
 if __name__ == "__main__":

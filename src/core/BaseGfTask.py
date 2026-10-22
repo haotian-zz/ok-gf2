@@ -64,6 +64,10 @@ battle_ui_re = re.compile(r"行动结束|\d{1,2}\s*/\s*\d{1,2}\s*回合")
 # 体力不足弹窗「情报拼图补充」：三个页签从左到右是 调度室储存、情报拼图道具、坍塌晶条
 challenge_button_re = re.compile(r"^挑战?$")  # 选关面板右下角的「挑战」按钮，实机偶尔只 OCR 出一个字
 stamina_popup_re = re.compile(r"情报拼图补充|情报.{0,3}补充|体力不足|体力补充")
+# 活动剧情里的特殊演出页（实录 2026-10-22 密米尔的返演·下篇 PS-1-7）：「掩码列表 / 演算完成」只有一个「终止覆写」按钮，
+# 点了是「终止码演算」文字页，底部「点击空白处继续」字很淡 OCR 读不到。剧情的跳过点不掉，要专门点
+story_exit_re = re.compile(r"^终止覆写$")
+story_blank_re = re.compile(r"^终止码演算$|点击空白处继续")
 # 弹窗说明里出现这些字样，说明当前页签会消耗抽卡资源，绝不能点确认
 # 第三页签是坍塌晶条（抽卡资源），绝不能用；第二页签「消耗接入密钥兑换」是正常的体力道具，
 # 所以禁用词里不能有「兑换」
@@ -536,6 +540,10 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
                 if challenge := self.ocr(0.5, 0.85, 1, 1, match=challenge_button_re):
                     self.log_info("体力恢复后重新点「挑战」", notify=True)
                     self.click(challenge[0], after_sleep=2)
+            elif story_exit := self.find_boxes(boxes, match=story_exit_re):
+                self.click(story_exit, after_sleep=2)
+            elif self.find_boxes(boxes, match=story_blank_re):
+                self.click_relative(0.5, 0.6, after_sleep=2)
             elif result := self.find_boxes(boxes, match=end_match, boundary=end_box):
                 # 优先返回"继续前进"
                 for r in result:
