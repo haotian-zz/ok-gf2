@@ -69,6 +69,9 @@ class FakeChapter:
         self.flicker = False  # 屏幕边上的卡片 OCR 时有时无
         self.blind_scrolls = 0  # 接下来几次往右挪视野「没看到新卡片」（模拟某一遍提前以为扫到头了）
         self.misread = {}  # 某关的名字 OCR 每次读成不同的样子（轮流取）
+        self.hidden = set()  # 整屏 OCR 读不到名字、只有补读卡片空档（read_gaps）才看得见的关
+        self.read_gaps = False
+        self.gap_scans = 0
         self.lose = set()  # 打这些关会输（结算「任务失败」）
         self.hero_mode = False
         self.aliases = {}
@@ -89,8 +92,9 @@ class FakeChapter:
         vis = [
             (SimpleNamespace(x=st["x"] - self.view_left, y=st.get("y", 600), name=n), {n})
             for n, st in self.stages.items()
-            if self.view_left <= st["x"] < self.view_left + SCREEN
+            if self.view_left <= st["x"] < self.view_left + SCREEN and (n not in self.hidden or self.read_gaps)
         ]
+        self.gap_scans += self.read_gaps
         if self.flicker:
             self._tick += 1
             vis = [v for v in vis if not (v[0].x > 1700 and self._tick % 2)]
@@ -261,6 +265,28 @@ class ClearChapterTest(unittest.TestCase):
         self.assertEqual(game.played, ["9-1"])
         self.assertEqual(played, 1)
         self.assertEqual(locked, ["9-10", "9-9", "SL-9-3", "时间锁", "永远"])
+
+    def test_unreadable_prerequisite_found_by_gap_read(self):
+        """实录 2026-10-22 驻足之地：前置剧情关 DS-1-1 的名字整屏 OCR 读不到，后面三关一直未解锁；补读空档后看完它再推完。"""
+        game = FakeChapter(
+            {
+                "DA-1-6": {"x": 100, "done": True},
+                "DS-1-1": {"x": 500, "done": False, "story": True, "needs": ["DA-1-6"]},
+                "DA-1-7": {"x": 900, "done": False, "needs": ["DS-1-1"]},
+                "DA-1-8": {"x": 1300, "done": False, "needs": ["DA-1-7"]},
+                "DA-1-9": {"x": 1700, "done": False, "needs": ["DA-1-8"]},
+            }
+        )
+        game.hidden = {"DS-1-1"}
+        played, locked = game.clear_chapter()
+        self.assertEqual(game.played, ["DS-1-1", "DA-1-7", "DA-1-8", "DA-1-9"])
+        self.assertEqual((played, locked), (4, []))
+        self.assertFalse(game.read_gaps)  # 补读只在那一遍开，扫完关掉
+
+    def test_gap_read_not_used_when_nothing_locked(self):
+        game = FakeChapter({"1-1": {"x": 100, "done": False}, "1-2": {"x": 600, "done": False, "needs": ["1-1"]}})
+        game.clear_chapter()
+        self.assertEqual(game.gap_scans, 0)
 
     def test_missed_badge_falls_back_to_panel(self):
         game = FakeChapter({"1-1": {"x": 100, "done": True}, "1-2": {"x": 500, "done": False}})
