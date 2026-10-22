@@ -10,7 +10,7 @@ import re
 from difflib import SequenceMatcher
 
 from src.core.BaseGfTask import map_re, nav_tabs_re
-from src.tasks.ClearMapTask import DIFFICULTY_MIN_FILL, ClearMapTask, campaign_re, difficulty_fill
+from src.tasks.ClearMapTask import DIFFICULTY_FILL, DIFFICULTY_MIN_FILL, ClearMapTask, campaign_re, difficulty_fill
 
 event_percent_re = re.compile(r"完\s*成\s*度\s*(\d{1,3})\s*%")
 event_tab_re = re.compile(r"^往期活动$")
@@ -23,7 +23,8 @@ EVENT_LIST_Y = 0.45  # 拖列表的高度：卡片立绘中间
 EVENT_LIST_MAX_DRAGS = 12
 EVENT_MAX = 40  # 一次最多推多少个活动（防止死循环）
 EVENT_TABS = ("剧情", "物资")  # 活动地图右下的两个页签，各是一张关卡地图
-EVENT_TAB_MIN_S = 50  # 页签算「实心」的饱和度门槛：纪念日礼赞的选中按钮是灰绿色（S≈70），难度按钮用的 90 认不出
+EVENT_TAB_MIN_S = 50  # 只看到一个页签时，算「实心」的饱和度门槛：纪念日礼赞的选中按钮是灰绿色（S≈70），难度按钮用的 90 认不出
+EVENT_TAB_MIN_DV = 20  # 两个页签都在时，选中的要比另一个亮多少（HSV 的 V）：实测选中 129～177，没选中 74～100
 
 
 def _center(b):
@@ -98,17 +99,32 @@ def event_title_on_map(boxes, width, height):
     return title if re.search(r"[\u4e00-\u9fff]{2,}", title) else None
 
 
+def button_brightness(frame, box, height):
+    """按钮文字周围一块的平均亮度（HSV 的 V，取 BGR 三通道最大值），区域和 difficulty_fill 一样。"""
+    cx, cy = box.x + box.width / 2, box.y + box.height / 2
+    dx, dy = DIFFICULTY_FILL[0] * height, DIFFICULTY_FILL[1] * height
+    region = frame[max(0, int(cy - dy)) : int(cy + dy), max(0, int(cx - dx)) : int(cx + dx)]
+    return float(region.max(axis=2).mean()) if region.size else 0.0
+
+
 def selected_event_tab(frame, boxes, height):
     """
-    「剧情」「物资」哪个是选中的：选中的是实心彩色按钮（狂想四重奏橙色、拂晓的回响青色），没选中的灰底；都不像返回 None。
-    实测 2560x1440（S>50）：选中 0.73～0.79（纪念日礼赞灰绿色按钮 0.73），没选中 0。
+    「剧情」「物资」哪个是选中的；认不出返回 None。
+    选中按钮的颜色每个活动不一样：狂想四重奏橙色、拂晓的回响青色、纪念日礼赞灰绿色、沉没夜潮蓝灰色（饱和度只有 26），
+    但都比没选中的灰底亮。所以两个页签都在时比亮度：实测 2560x1440 选中 129～177，没选中 74～100。
+    只看到一个页签时退回看是不是实心彩色。
     """
-    best, best_fill = None, DIFFICULTY_MIN_FILL
-    for b in boxes:
-        name = re.sub(r"\s", "", b.name or "")
-        if name in EVENT_TABS and (fill := difficulty_fill(frame, b, height, EVENT_TAB_MIN_S)) > best_fill:
-            best, best_fill = name, fill
-    return best
+    tabs = {re.sub(r"\s", "", b.name or ""): b for b in boxes}
+    tabs = {name: b for name, b in tabs.items() if name in EVENT_TABS}
+    if len(tabs) == 2:
+        (best, v1), (_, v2) = sorted(
+            ((name, button_brightness(frame, b, height)) for name, b in tabs.items()), key=lambda t: -t[1]
+        )
+        return best if v1 - v2 >= EVENT_TAB_MIN_DV else None
+    for name, b in tabs.items():
+        if difficulty_fill(frame, b, height, EVENT_TAB_MIN_S) > DIFFICULTY_MIN_FILL:
+            return name
+    return None
 
 
 class EventMapTask(ClearMapTask):

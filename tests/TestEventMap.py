@@ -128,7 +128,9 @@ class EventTabTest(unittest.TestCase):
         exec(compile(ast.Module(body=extra, type_ignores=[]), "ClearMapTask", "exec"), ns)
 
     def frame(self, filled, color=(0, 110, 240)):
-        img = np.full((H, W, 3), 60, np.uint8)  # 暗灰底
+        img = np.full((H, W, 3), 30, np.uint8)  # 暗底
+        for x in (2128, 2379):
+            img[1320:1395, x - 40 : x + 160] = (79, 79, 79)  # 没选中的灰按钮（实测 V≈79）
         x = 2128 if filled == "剧情" else 2379
         img[1320:1395, x - 40 : x + 160] = color  # 默认橙色实心按钮（BGR）
         return img
@@ -144,6 +146,17 @@ class EventTabTest(unittest.TestCase):
         muted = cv2.cvtColor(np.uint8([[[60, 70, 174]]]), cv2.COLOR_HSV2BGR)[0, 0].tolist()
         for want in ("剧情", "物资"):
             self.assertEqual(ns["selected_event_tab"](self.frame(want, muted), tabs, H), want)
+
+    def test_bluish_gray_button_is_selected(self):
+        """实录 2026-10-22 沉没夜潮：选中的「剧情」是蓝灰色（S≈26 V≈129），没颜色，只比没选中的（V≈79）亮。"""
+        tabs = boxes([("剧情", 2128, 1339), ("物资", 2379, 1339)])
+        for want in ("剧情", "物资"):
+            self.assertEqual(ns["selected_event_tab"](self.frame(want, (129, 118, 110)), tabs, H), want)
+
+    def test_single_tab_falls_back_to_fill(self):
+        tab = boxes([("剧情", 2128, 1339)])
+        self.assertEqual(ns["selected_event_tab"](self.frame("剧情"), tab, H), "剧情")
+        self.assertIsNone(ns["selected_event_tab"](self.frame("物资"), tab, H))
 
     def test_no_filled_button(self):
         img = np.full((H, W, 3), 60, np.uint8)
