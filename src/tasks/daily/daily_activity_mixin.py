@@ -169,31 +169,12 @@ class DailyActivityMixin:
         self.info_set(reward_activity, "待核查：领取按钮持续出现")
         return "待核查"
 
-    def _ensure_game_front(self):
-        """
-        活动层是 3D 场景，游戏不在前台时 PostMessage 的点击和按键都不生效（假激活不够），要真的把游戏提到前台。
-        实录 2026-10-21 主机桌面 1280x768：吃饭停在「选择菜品」，「下一步」、ESC、返回箭头都没反应，提到前台后一点就过。
-        会话鼠标每次点击前本来就会提前台，这里是给 PostMessage（Genshin）模式补上。
-        """
-        hwnd = self.hwnd.hwnd
-        if not win32gui.IsWindow(hwnd) or win32gui.GetForegroundWindow() == hwnd:
-            return
-        try:
-            win32gui.SetForegroundWindow(hwnd)
-        except win32gui.error:
-            pass
-        self.sleep(0.3)
-        if win32gui.GetForegroundWindow() == hwnd:
-            self.log_info("活动层要游戏在前台才收输入，已把游戏提到前台", notify=False)
-        else:
-            self.log_warning("活动层要游戏在前台才收输入，但没能把游戏提到前台")
-
     def _enter_free_time_layer(self):
         # 点击命中不代表切页成功；只有活动层 HUD 才能开始移动和交互。
         """有限重试进入活动层，避免主页漏读导致长时间等待。"""
         for attempt in range(3):
             self.log_info(f"尝试进入活动层：第 {attempt + 1}/3 次")
-            self._ensure_game_front()
+            self.ensure_game_front()
             self.wait_click_ocr(
                 match="活动层",
                 box=self.box.right,
@@ -227,7 +208,7 @@ class DailyActivityMixin:
                 completed = False
                 continue
             if self.is_free_layer(time_out=1):
-                self._ensure_game_front()
+                self.ensure_game_front()
                 if i == 0:
                     drink_result = self.do_food_flow(
                         enter_func=self.go_drink,
@@ -275,7 +256,7 @@ class DailyActivityMixin:
             self.ensure_main(time_out=60)
             return False
         if self.is_free_layer(time_out=1):
-            self._ensure_game_front()
+            self.ensure_game_front()
             if self.config.get("活动层浇花", True):
                 water_result = self.water_flowers()
                 if water_result is False:

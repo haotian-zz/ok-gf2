@@ -455,6 +455,28 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
     def get_role_by_name(self, name):
         return next((k for k, v in self.roles_dict.items() if name in v), None)
 
+    def ensure_game_front(self):
+        """
+        游戏不在前台就真的提到前台（SetForegroundWindow）。活动层是 3D 场景，游戏在后台时 PostMessage 的点击和按键
+        （含 ESC）都不生效，假激活不够。实录 2026-10-21 主机桌面 1280x768：吃饭停在「选择菜品」，「下一步」、ESC、
+        返回箭头都没反应，回主页也退不出来；提到前台后一点就过。会话鼠标每次点击前本来就会提前台。
+        """
+        import win32gui
+
+        hwnd = self.hwnd.hwnd
+        if not win32gui.IsWindow(hwnd) or win32gui.GetForegroundWindow() == hwnd:
+            return True
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except win32gui.error:
+            pass
+        self.sleep(0.3)
+        if win32gui.GetForegroundWindow() == hwnd:
+            self.log_info("游戏不在前台（活动层等界面要前台才收输入），已提到前台", notify=False)
+            return True
+        self.log_warning("游戏不在前台，也没能提到前台")
+        return False
+
     def ensure_main(self, recheck_time=1, time_out=30, esc=True, loading_grace=120):
         """
         回到主页。超时后如果画面还是加载页（NOW LOADING / 移动中 / 资源加载中），超时顺延，
@@ -468,6 +490,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         while True:
             if self.is_main(recheck_time=recheck_time, esc=esc):
                 return True
+            self.ensure_game_front()  # 后台时活动层里按 ESC 退不出来
             if self._deadline_bump:
                 # is_main 里刚重启过游戏，从现在起重新计时
                 deadline = time.time() + max(time_out, self._deadline_bump)
