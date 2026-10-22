@@ -10,11 +10,12 @@ import re
 from difflib import SequenceMatcher
 
 from src.core.BaseGfTask import map_re, nav_tabs_re
-from src.tasks.ClearMapTask import ClearMapTask, campaign_re
+from src.tasks.ClearMapTask import DIFFICULTY_MIN_FILL, ClearMapTask, campaign_re, difficulty_fill
 
 event_percent_re = re.compile(r"完\s*成\s*度\s*(\d{1,3})\s*%")
 event_tab_re = re.compile(r"^往期活动$")
 event_story_re = re.compile(r"^活动剧情$")
+map_tab_re = re.compile(r"^(剧\s*情|物\s*资)$")  # 活动地图右下的页签
 EVENT_TITLE_DX = 0.08  # 活动名在「完成度」正上方：中心 x 相差不超过画面宽的这个比例
 EVENT_TITLE_DY = (0.02, 0.07)  # 活动名中心在「完成度」中心上方多远（画面高的比例）
 EVENT_LIST_DRAG = (0.75, 0.35)  # 拖活动列表时按住的起止 x（相对宽），一次挪两张多卡片，不会跳过
@@ -88,6 +89,19 @@ def event_title_on_map(boxes, width, height):
     return min(cands, key=lambda b: b.y).name.strip() if cands else None
 
 
+def selected_event_tab(frame, boxes, height):
+    """
+    「剧情」「物资」哪个是选中的：选中的是实心彩色按钮（狂想四重奏橙色、拂晓的回响青色），没选中的灰底；都不像返回 None。
+    实测 2560x1440：选中 0.76～0.77，没选中 0。
+    """
+    best, best_fill = None, DIFFICULTY_MIN_FILL
+    for b in boxes:
+        name = re.sub(r"\s", "", b.name or "")
+        if name in EVENT_TABS and (fill := difficulty_fill(frame, b, height)) > best_fill:
+            best, best_fill = name, fill
+    return best
+
+
 class EventMapTask(ClearMapTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -153,28 +167,41 @@ class EventMapTask(ClearMapTask):
             locked += tab_locked
         return total, locked
 
+    def read_event_tab(self):
+        """右下「剧情 / 物资」-> (选中的页签, {页签名: 按钮框})；没有页签返回 (None, {})。"""
+        self.next_frame()
+        boxes = self.ocr(box="bottom_right", match=map_tab_re) or []
+        buttons = {re.sub(r"\s", "", b.name): b for b in boxes}
+        return selected_event_tab(self.frame, boxes, self.height), buttons
+
     def switch_event_tab(self, tab):
-        """切到右下的「剧情 / 物资」页签，返回切没切过去（地图上的关卡名变了才算）。"""
+        """
+        切到右下的「剧情 / 物资」页签，返回切没切过去。按按钮是不是实心彩色认选中（同难度按钮）。
+        实录 2026-10-22 密米尔的返演·上篇：旧逻辑看「点完地图上的关卡名变没变」，物资还锁着点了没反应，
+        但地图视野挪了、关卡名变了，被当成切过去了，把剧情图又扫了一遍。
+        """
         self.close_map_panel()
-        before = {b.name for b, _ in self.ensure_map()}
-        button = self.ocr(box="bottom_right", match=re.compile(rf"^{tab[0]}\s*{tab[1]}$"))
-        if not button:
-            self.log_info(f"活动地图右下没找到「{tab}」页签", notify=False)
+        self.ensure_map()
+        current, buttons = self.read_event_tab()
+        if not buttons:
+            self.log_info("活动地图右下没找到页签", notify=False)
             return tab == EVENT_TABS[0]  # 没有页签的活动只有一张图，当作「剧情」
-        # 实录 2026-10-22：关卡面板刚关、还在收起动画时点页签没生效，留在物资图上当剧情推了。地图没变就再点一次
         for _ in range(2):
-            self.click(button, after_sleep=2)
-            after = {b.name for b, _ in self.ensure_map()}
-            if after != before:
+            if current == tab:
+                self.log_info(f"推活动「{self.event_name or '?'}」的「{tab}」页签", notify=False)
+                return True
+            if tab not in buttons:
                 break
-            self.sleep(1)
-        if after == before:
-            if tab != EVENT_TABS[0]:
-                self.log_info(f"「{tab}」页签点了没反应（还没解锁），先不推", notify=True)
-                return False
-            # 点「剧情」地图不变：本来就在剧情页签（物资没解锁时只能停在剧情）
-        self.log_info(f"推活动「{self.event_name or '?'}」的「{tab}」页签", notify=False)
-        return True
+            # 关卡面板刚关、还在收起动画时点页签可能不生效，没切过去再点一次
+            self.click(buttons[tab], after_sleep=2)
+            self.ensure_map()
+            current, buttons = self.read_event_tab()
+        if current == tab:
+            self.log_info(f"推活动「{self.event_name or '?'}」的「{tab}」页签", notify=False)
+            return True
+        self.debug_shot(f"event_tab_{tab}")
+        self.log_info(f"「{tab}」页签点了没切过去（还没解锁），先不推", notify=True)
+        return False
 
     def chapter_medals(self):
         # 活动地图左下角的「0/45」是活动代币收集进度，不是勋章

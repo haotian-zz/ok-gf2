@@ -95,5 +95,46 @@ class EventListTest(unittest.TestCase):
         self.assertEqual(event_title_on_map(boxes(rows), W, H), "狂想四重秦")
 
 
+try:
+    import cv2
+    import numpy as np
+except ImportError:  # mac 开发机没装 cv2，这组只在 Windows 上跑
+    cv2 = None
+
+
+@unittest.skipIf(cv2 is None, "需要 cv2")
+class EventTabTest(unittest.TestCase):
+    """实录 2026-10-22 密米尔的返演·上篇：物资还锁着，点了不切；不能看关卡名变没变，要看哪个按钮是实心的。"""
+
+    def setUp(self):
+        clear = ast.parse((Path(__file__).resolve().parents[1] / "src/tasks/ClearMapTask.py").read_text(encoding="utf-8"))
+        extra = [
+            n
+            for n in clear.body
+            if (isinstance(n, ast.FunctionDef) and n.name == "difficulty_fill")
+            or (
+                isinstance(n, ast.Assign)
+                and any(isinstance(x, ast.Name) and x.id in ("DIFFICULTY_FILL", "DIFFICULTY_MIN_FILL") for x in n.targets)
+            )
+        ]
+        ns["cv2"] = cv2
+        exec(compile(ast.Module(body=extra, type_ignores=[]), "ClearMapTask", "exec"), ns)
+
+    def frame(self, filled):
+        img = np.full((H, W, 3), 60, np.uint8)  # 暗灰底
+        x = 2128 if filled == "剧情" else 2379
+        img[1320:1395, x - 40 : x + 160] = (0, 110, 240)  # 橙色实心按钮（BGR）
+        return img
+
+    def test_filled_button_is_selected(self):
+        tabs = boxes([("剧情", 2128, 1339), ("物资", 2379, 1339)])
+        for want in ("剧情", "物资"):
+            self.assertEqual(ns["selected_event_tab"](self.frame(want), tabs, H), want)
+
+    def test_no_filled_button(self):
+        img = np.full((H, W, 3), 60, np.uint8)
+        self.assertIsNone(ns["selected_event_tab"](img, boxes([("剧情", 2128, 1339), ("物资", 2379, 1339)]), H))
+
+
 if __name__ == "__main__":
     unittest.main()
