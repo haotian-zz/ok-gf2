@@ -201,6 +201,22 @@ class EventListDragTest(unittest.TestCase):
     def swipes(self, task):
         return [c.args[:3:2] for c in task.swipe_relative.call_args_list]
 
+    def test_drag_taken_as_click_returns_to_list_and_drags_again(self):
+        """实录 2026-10-22 13:29：拖动被当成点击进了「共诉隐匿时」，不能当成列表到头。"""
+        task = Mock()
+        task.width = W
+        screens = [
+            [(SimpleNamespace(name=n, x=600 * i), 0) for i, n in enumerate(["纪念日礼赞", "共诉隐匿时", "烟火迎春归", "素银匿信"])],
+            [],
+            [(SimpleNamespace(name=n, x=600 * i), 0) for i, n in enumerate(["共诉隐匿时", "烟火迎春归", "素银匿信", "镜茧与囚蝶"])],
+        ]
+        task.read_event_cards.side_effect = screens
+        task.on_event_list.return_value = False
+        task.swipe_event_list.side_effect = lambda d, scale=1.0: self.methods["swipe_event_list"](task, d, scale)
+        cards = self.methods["drag_event_list"](task, 1)
+        self.assertEqual("镜茧与囚蝶", cards[-1][0].name)
+        task.open_event_list.assert_called_once()
+
     def test_overshoot_drags_back_half(self):
         task, cards = self.run_drag(
             [

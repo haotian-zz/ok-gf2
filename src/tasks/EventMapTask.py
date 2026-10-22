@@ -336,6 +336,14 @@ class EventMapTask(ClearMapTask):
         """
         before = self.read_event_cards()
         after = self.swipe_event_list(direction)
+        for _ in range(2):
+            if after or self.on_event_list():
+                break
+            # 实录 2026-10-22 13:29：拖动被游戏当成了点击，进了「共诉隐匿时」，读不到卡片被当成到头，
+            # 后面带「!」的虚境新始 / 瑞骋迎春至 / 月下安魂曲都没去领
+            self.log_info("拖列表时被当成点击、误进了活动，退回列表再拖", notify=False)
+            self.open_event_list()
+            after = self.swipe_event_list(direction)
         for _ in range(3):
             if not before or not after or any(same_event(t.name, b.name) for t, _ in after for b, _ in before):
                 break
