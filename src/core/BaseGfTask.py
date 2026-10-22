@@ -38,6 +38,7 @@ from src.core.support_select import (
     find_tutorial_tile,
     find_unit_tags,
     identify_cards,
+    in_start_button,
     is_orange_check,
     parse_support_count,
     read_badge,
@@ -831,7 +832,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         for t in reversed(find_deploy_tiles(self.frame, self.width, self.height)):
             if all((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 >= 45**2 for (x, y), _ in out):
                 out.append((t["center"], f"地格({int(t['center'][0])},{int(t['center'][1])}, 填充 {t['fill']})"))
-        return out[:6]
+        return [(c, d) for c, d in out if not in_start_button(c, self.width, self.height)][:6]
 
     def _select_unit_on_map(self, want):
         """点地图上的单位格子，直到左下角名字是 want。点中单位后右侧面板会切回「我的人形」。"""
@@ -879,7 +880,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
     def _occupied_and_empty(self):
         """(有人的地格列表, 空地格列表)：有人的按编号标签定位，空的用菱形模板找并排除标签附近的。"""
         tags = find_unit_tags(self.frame, self.width, self.height)
-        occupied = unit_tiles_from_tags(tags, self.height)
+        occupied = unit_tiles_from_tags(tags, self.height, self.width)
         tiles = find_deploy_tiles(self.frame, self.width, self.height)
         near = lambda t: any((t["center"][0] - x) ** 2 + (t["center"][1] - y) ** 2 < 45**2 for x, y in occupied)
         empty = [t for t in tiles if not near(t)]
@@ -907,6 +908,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
             ]
             extra = fallback_empty_tiles(self.frame, self.width, self.height, [c for c, _ in out], occupied)
             out += [(c, f"兜底地格({int(c[0])},{int(c[1])})") for c in extra]
+        out = [(c, d) for c, d in out if not in_start_button(c, self.width, self.height)]
         self.log_info(f"阵容 {count}，候选地格 {len(out)} 个", notify=False)
         return out[:6]
 
