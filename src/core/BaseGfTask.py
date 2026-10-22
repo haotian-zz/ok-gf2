@@ -1346,6 +1346,8 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         keep_lineup=False,
     ):
         """
+        确认战斗界面后执行自动作战；开局无法识别时抛出明确错误。
+
         :param keep_lineup: 这一轮是点「继续前进」进来的，阵容（含助战）沿用上一段，不再整理直接开战
         """
         self.info_set("current_task", "auto battle")
@@ -1358,7 +1360,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
         )
         self.debug_shot("battle_entry", result)
         if not result:
-            raise Exception("2 分钟内没进入部署界面（没等到作战开始/行动结束/继续前进），已停止，看 battle_entry 截图")
+            raise RuntimeError("2 分钟内没进入部署界面（没等到作战开始/行动结束/继续前进），已停止，看 battle_entry 截图")
         if result[0].name != "继续前进":
             self._continue_streak = 0
         if result and result[0].name == "继续前进":
