@@ -20,6 +20,7 @@ EVENT_TITLE_DX = 0.08  # 活动名在「完成度」正上方：中心 x 相差�
 EVENT_TITLE_DY = (0.02, 0.07)  # 活动名中心在「完成度」中心上方多远（画面高的比例）
 EVENT_LIST_DRAG = (0.75, 0.35)  # 拖活动列表时按住的起止 x（相对宽），一次挪两张多卡片，不会跳过
 EVENT_LIST_Y = 0.45  # 拖列表的高度：卡片立绘中间
+EVENT_LIST_SAME_X = 0.02  # 拖列表前后同一张卡片 x 差不超过画面宽的这个比例，算没挪动
 EVENT_LIST_HOLD = 0.5  # 拖到位停多久再松手（秒），不停会甩出惯性
 EVENT_LIST_MAX_DRAGS = 30  # 拖到位停住后一次只挪一张卡片（实测），18 个活动、一屏 4 张要拖 14 次
 EVENT_MAX = 40  # 一次最多推多少个活动（防止死循环）
@@ -69,6 +70,18 @@ def same_event(a, b):
     if pa and pb and pa.group(0) != pb.group(0):
         return False  # 「密米尔的返演·上篇 / 下篇」只差一个字，是两个活动
     return a in b or b in a or SequenceMatcher(None, a, b).ratio() >= 0.6
+
+
+def list_moved(before, after, width):
+    """
+    拖活动列表前后的卡片 [(活动名框, 完成度)]：有同一个活动 x 挪了、或者一张都对不上，算挪动了；同名卡片都还在原位算没挪（到头了）。
+    实录 2026-10-22：一次只挪一张时，边上半张卡片读成「离赛博格 / 成度100%」配不上对，新露出的「素银匿信」只读到「完成度」，
+    前后都只剩中间三张、名字一样，按名字比被当成到头，后面三个活动没推就收工了。
+    """
+    if not before or not after:
+        return [t.name for t, _ in before] != [t.name for t, _ in after]
+    shared = [(a, b) for a, _ in after for b, _ in before if same_event(a.name, b.name)]
+    return not shared or any(abs(a.x - b.x) > EVENT_LIST_SAME_X * width for a, b in shared)
 
 
 def pick_event(cards, skip):
@@ -283,14 +296,14 @@ class EventMapTask(ClearMapTask):
         实录 2026-10-22：拖完马上松手会甩出惯性，有一次挪了五六张卡片，把「镜茧与囚蝶」等几个活动整段跳过，
         推完回列表找不到它、读不到完成度。现在拖到位停一下再松手；挪完和挪之前一张都对不上（跳过了卡片），就往回拖半程补看。
         """
-        before = [t.name for t, _ in self.read_event_cards()]
+        before = self.read_event_cards()
         after = self.swipe_event_list(direction)
         for _ in range(3):
-            if not before or not after or any(same_event(t.name, name) for t, _ in after for name in before):
+            if not before or not after or any(same_event(t.name, b.name) for t, _ in after for b, _ in before):
                 break
             self.log_info("活动列表一次挪过头了（前后卡片对不上），往回拖半程补看")
             after = self.swipe_event_list(-direction, 0.5)
-        return None if [t.name for t, _ in after] == before else after
+        return after if list_moved(before, after, self.width) else None
 
     def swipe_event_list(self, direction, scale=1.0):
         """按 EVENT_LIST_DRAG 拖一次（scale 缩放拖动距离），返回拖完的卡片。"""

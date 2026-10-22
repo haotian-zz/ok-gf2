@@ -179,12 +179,24 @@ class EventListDragTest(unittest.TestCase):
         self.methods = dict(ns)
         exec(compile(ast.Module(body=body, type_ignores=[]), str(source), "exec"), self.methods)
 
-    def run_drag(self, screens, direction=1):
+    def run_drag(self, screens, direction=1, still=False):
+        """screens：每次读列表看到的活动名，从左到右每张隔 600；still=True 表示卡片都没挪（到头了）。"""
         task = Mock()
-        screens = [[(SimpleNamespace(name=n), 0) for n in names] for names in screens]
+        task.width = W
+        screens = [
+            [(SimpleNamespace(name=n, x=600 * i + (0 if still else 150 * k)), 0) for i, n in enumerate(names)]
+            for k, names in enumerate(screens)
+        ]
         task.read_event_cards.side_effect = screens
         task.swipe_event_list.side_effect = lambda d, scale=1.0: self.methods["swipe_event_list"](task, d, scale)
         return task, self.methods["drag_event_list"](task, direction)
+
+    def test_partial_edge_cards_still_count_as_moved(self):
+        """实录 2026-10-22 10:34：前后都只配上中间三张、名字相同，但卡片挪了一张的位置，不能当成到头。"""
+        before = [(SimpleNamespace(name=n, x=x), 100) for n, x in (("纪念日礼赞", 1210), ("共诉隐匿时", 1755), ("烟火迎春归", 2300))]
+        after = [(SimpleNamespace(name=n, x=x), 100) for n, x in (("纪念日礼赞", 660), ("共诉隐匿时", 1205), ("烟火迎春归", 1750))]
+        self.assertTrue(ns["list_moved"](before, after, W))
+        self.assertFalse(ns["list_moved"](before, [(SimpleNamespace(name=t.name, x=t.x + 8), p) for t, p in before], W))
 
     def swipes(self, task):
         return [c.args[:3:2] for c in task.swipe_relative.call_args_list]
@@ -211,7 +223,7 @@ class EventListDragTest(unittest.TestCase):
         self.assertEqual(cards[0][0].name, "密米尔的返演·上篇")
 
     def test_list_end_returns_none(self):
-        task, cards = self.run_drag([["瑞骋迎春至", "月下安魂曲"], ["瑞骋迎春至", "月下安魂曲"]])
+        task, cards = self.run_drag([["瑞骋迎春至", "月下安魂曲"], ["瑞骋迎春至", "月下安魂曲"]], still=True)
         self.assertIsNone(cards)
 
 
