@@ -289,7 +289,7 @@ class ClearMapTask(BaseGfTask):
                 "战斗内点击自动": False,
                 "推完继续下一章": True,
                 "难度": "普通",
-                "英雄难度": False,
+                "英雄难度": True,
             }
         )
         self.config_type["难度"] = {"type": "drop_down", "options": list(DIFFICULTIES)}
@@ -402,7 +402,7 @@ class ClearMapTask(BaseGfTask):
         self.processors = processors
 
         # 开推前还不知道本章是不是英雄难度：先按配置算（停在英雄难度的失败结算页启动时要能点确认回地图），每章开推前再按实际改
-        self.hero_mode = bool(self.config.get("英雄难度", False))
+        self.hero_mode = bool(self.config.get("英雄难度", True))
         self.log_info("推图开始", notify=False)
         self.reset_lineup("推图")  # 每次启动任务只在第一场整理阵容，之后沿用
         self.start_watchdog()
@@ -440,7 +440,7 @@ class ClearMapTask(BaseGfTask):
         """每章开推前：切到配置的难度，再按配置开 / 关英雄难度。"""
         self.close_map_panel()  # 面板会盖住右下角的难度按钮
         self.ensure_difficulty(self.config.get("难度") or "普通")
-        self.hero_mode = self.ensure_hero(bool(self.config.get("英雄难度", False)))
+        self.hero_mode = self.ensure_hero(bool(self.config.get("英雄难度", True)))
 
     def read_difficulty(self, time_out=3):
         """
