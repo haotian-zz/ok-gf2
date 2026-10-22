@@ -9,6 +9,8 @@ from src.core.lineup_config import preset_name_for_kind, support_enabled_for_kin
 
 OUTPOST_KIND = "尘烟前哨战"
 power_re = re.compile(r"^\d{3,6}$")
+# 尘烟前线卡片在两期之间显示「12天22小时后开启」
+chenyan_not_open_re = re.compile(r"后\s*开\s*启|未\s*开\s*启|未\s*开\s*放")
 # 班组助战弹窗里战力前面有个图标，实录 OCR 成「心25850」
 support_power_re = re.compile(r"^\D?\d{4,6}$")
 
@@ -224,14 +226,22 @@ class DailyBattleMixin:
         end = self.ocr(match=re.compile("前线"), box=self.box.bottom_right, log=True)
         if not end:
             return
+        # 实录 2026-10-22：两期之间卡片底下是「12天22小时后开启」，点了进不去；原来照样按返回，
+        # 直接退出了班组页，后面的「补给」找不到，班组补给天天漏领
+        if not_open := self.ocr(match=chenyan_not_open_re, box=self.box.bottom_right):
+            self.log_info(f"尘烟前线还没开放（{not_open[0].name}），跳过", notify=False)
+            self.info_set("尘烟", f"未开放：{not_open[0].name}")
+            return
         self.click(end, after_sleep=1)
         assault_locked = False
         bought = False
+        entered = False
         # 每天 2 次（开了「尘烟买第3次」再花晶条买 1 次）；多留一轮余量，防止次数读不准时死循环
         for _ in range(5):
             result = self.ocr(0.89, 0.01, 0.99, 0.1, match=stamina_re, box=self.box.top_right)
             if not result:
                 break
+            entered = True
             tickets = int(result[0].name.split("/")[0])
             self.log_info(f"chenyan tickets {tickets}")
             self.info_set("chenyan tickets", tickets)
@@ -258,6 +268,10 @@ class DailyBattleMixin:
             if not self.chenyan_outpost():
                 break
             self.sleep(2)
+        if not entered and self.ocr(match=["补给", "要务"], box=self.box.bottom_right):
+            # 点了卡片没进去、还停在班组页：不能按返回，否则后面的「补给」就找不到了
+            self.log_info("尘烟前线没进去，还在班组页，跳过", notify=False)
+            return
         self.back(after_sleep=2)
 
     def _chenyan_buy_ticket(self):
