@@ -9,6 +9,7 @@ import unittest
 from difflib import SequenceMatcher
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 source = Path(__file__).resolve().parents[1] / "src/tasks/EventMapTask.py"
 tree = ast.parse(source.read_text(encoding="utf-8"))
@@ -161,6 +162,51 @@ class EventTabTest(unittest.TestCase):
     def test_no_filled_button(self):
         img = np.full((H, W, 3), 60, np.uint8)
         self.assertIsNone(ns["selected_event_tab"](img, boxes([("剧情", 2128, 1339), ("物资", 2379, 1339)]), H))
+
+
+class EventListDragTest(unittest.TestCase):
+    """实录 2026-10-22：拖列表甩出惯性，从「逃离赛博格…烟火迎春归」一下挪到「…乐园 / 沉没夜潮」，中间的「镜茧与囚蝶」被跳过。"""
+
+    def setUp(self):
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "EventMapTask")
+        body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in ("drag_event_list", "swipe_event_list")]
+        self.methods = dict(ns)
+        exec(compile(ast.Module(body=body, type_ignores=[]), str(source), "exec"), self.methods)
+
+    def run_drag(self, screens, direction=1):
+        task = Mock()
+        screens = [[(SimpleNamespace(name=n), 0) for n in names] for names in screens]
+        task.read_event_cards.side_effect = screens
+        task.swipe_event_list.side_effect = lambda d, scale=1.0: self.methods["swipe_event_list"](task, d, scale)
+        return task, self.methods["drag_event_list"](task, direction)
+
+    def swipes(self, task):
+        return [c.args[:3:2] for c in task.swipe_relative.call_args_list]
+
+    def test_overshoot_drags_back_half(self):
+        task, cards = self.run_drag(
+            [
+                ["逃离赛博格", "纪念日礼赞", "共诉隐匿时", "烟火迎春归"],
+                ["欢乐园", "沉没夜潮", "前进吧，王牌配送员！", "虚境新始"],
+                ["烟火迎春归", "镜茧与囚蝶", "欢乐园", "沉没夜潮"],
+            ]
+        )
+        self.assertEqual([t.name for t, _ in cards], ["烟火迎春归", "镜茧与囚蝶", "欢乐园", "沉没夜潮"])
+        (a1, b1), (a2, b2) = self.swipes(task)
+        self.assertGreater(a1, b1)  # 先往右挪（手往左拖）
+        self.assertLess(a2, b2)  # 再往回拖
+        self.assertAlmostEqual(abs(a2 - b2), abs(a1 - b1) / 2)
+        for c in task.swipe_relative.call_args_list:
+            self.assertGreater(c.kwargs["settle_time"], 0)  # 停一下再松手，不甩惯性
+
+    def test_normal_drag_keeps_overlap(self):
+        task, cards = self.run_drag([["狂想四重奏", "拂晓的回响", "密米尔的返演·上篇"], ["密米尔的返演·上篇", "密米尔的返演·下篇", "逃离赛博格"]])
+        self.assertEqual(len(self.swipes(task)), 1)
+        self.assertEqual(cards[0][0].name, "密米尔的返演·上篇")
+
+    def test_list_end_returns_none(self):
+        task, cards = self.run_drag([["瑞骋迎春至", "月下安魂曲"], ["瑞骋迎春至", "月下安魂曲"]])
+        self.assertIsNone(cards)
 
 
 if __name__ == "__main__":

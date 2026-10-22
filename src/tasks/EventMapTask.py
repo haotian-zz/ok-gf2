@@ -20,6 +20,7 @@ EVENT_TITLE_DX = 0.08  # 活动名在「完成度」正上方：中心 x 相差�
 EVENT_TITLE_DY = (0.02, 0.07)  # 活动名中心在「完成度」中心上方多远（画面高的比例）
 EVENT_LIST_DRAG = (0.75, 0.35)  # 拖活动列表时按住的起止 x（相对宽），一次挪两张多卡片，不会跳过
 EVENT_LIST_Y = 0.45  # 拖列表的高度：卡片立绘中间
+EVENT_LIST_HOLD = 0.5  # 拖到位停多久再松手（秒），不停会甩出惯性
 EVENT_LIST_MAX_DRAGS = 12
 EVENT_MAX = 40  # 一次最多推多少个活动（防止死循环）
 EVENT_TABS = ("剧情", "物资")  # 活动地图右下的两个页签，各是一张关卡地图
@@ -271,13 +272,27 @@ class EventMapTask(ClearMapTask):
         return cards
 
     def drag_event_list(self, direction):
-        """往右（1）/ 往左（-1）挪活动列表，返回挪完的卡片；没挪动（到头了）返回 None。"""
+        """
+        往右（1）/ 往左（-1）挪活动列表，返回挪完的卡片；没挪动（到头了）返回 None。
+        实录 2026-10-22：拖完马上松手会甩出惯性，有一次挪了五六张卡片，把「镜茧与囚蝶」等几个活动整段跳过，
+        推完回列表找不到它、读不到完成度。现在拖到位停一下再松手；挪完和挪之前一张都对不上（跳过了卡片），就往回拖半程补看。
+        """
         before = [t.name for t, _ in self.read_event_cards()]
-        a, b = EVENT_LIST_DRAG if direction > 0 else EVENT_LIST_DRAG[::-1]
-        self.swipe_relative(a, EVENT_LIST_Y, b, EVENT_LIST_Y, duration=0.6)
-        self.sleep(1.5)
-        after = self.read_event_cards()
+        after = self.swipe_event_list(direction)
+        for _ in range(3):
+            if not before or not after or any(same_event(t.name, name) for t, _ in after for name in before):
+                break
+            self.log_info("活动列表一次挪过头了（前后卡片对不上），往回拖半程补看")
+            after = self.swipe_event_list(-direction, 0.5)
         return None if [t.name for t, _ in after] == before else after
+
+    def swipe_event_list(self, direction, scale=1.0):
+        """按 EVENT_LIST_DRAG 拖一次（scale 缩放拖动距离），返回拖完的卡片。"""
+        a, b = EVENT_LIST_DRAG
+        mid, half = (a + b) / 2, (a - b) / 2 * scale * (1 if direction > 0 else -1)
+        self.swipe_relative(mid + half, EVENT_LIST_Y, mid - half, EVENT_LIST_Y, duration=0.6, settle_time=EVENT_LIST_HOLD)
+        self.sleep(1.5)
+        return self.read_event_cards()
 
     def find_event(self, want=None):
         """
