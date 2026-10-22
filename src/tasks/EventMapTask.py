@@ -83,21 +83,27 @@ def event_title_on_map(boxes, width, height):
     """
     活动地图顶部正中：小字活动名在「活动剧情」上面一行。同一行可能被 OCR 拆成几个框
     （实录 2026-10-22「密米尔的返演·上篇」只读出「密米尔的返演」，上篇 / 下篇分不清），按 x 拼起来。
+    活动名上面可能还有一行装饰英文（实录「前进吧，王牌配送员！」上面是「SAKURA」），从上往下取第一行有中文的。
     """
-    cands = [
-        b
-        for b in boxes
-        if b.y < 0.06 * height
-        and 0.3 * width < _center(b)[0] < 0.7 * width
-        and (b.name or "").strip()
-        and not event_story_re.search(b.name or "")
-    ]
-    if not cands:
-        return None
-    top = min(cands, key=lambda b: b.y)
-    line = sorted((b for b in cands if abs(_center(b)[1] - _center(top)[1]) < 0.015 * height), key=lambda b: b.x)
-    title = "".join(b.name.strip() for b in line)
-    return title if re.search(r"[\u4e00-\u9fff]{2,}", title) else None
+    cands = sorted(
+        (
+            b
+            for b in boxes
+            if b.y < 0.06 * height
+            and 0.3 * width < _center(b)[0] < 0.7 * width
+            and (b.name or "").strip()
+            and not event_story_re.search(b.name or "")
+        ),
+        key=lambda b: b.y,
+    )
+    while cands:
+        top = cands[0]
+        line = [b for b in cands if abs(_center(b)[1] - _center(top)[1]) < 0.015 * height]
+        title = "".join(b.name.strip() for b in sorted(line, key=lambda b: b.x))
+        if re.search(r"[\u4e00-\u9fff]{2,}", title):
+            return title
+        cands = [b for b in cands if b not in line]
+    return None
 
 
 def button_brightness(frame, box, height):

@@ -102,6 +102,12 @@ class EventListTest(unittest.TestCase):
         self.assertEqual(title, "密米尔的返演·上篇")
         self.assertFalse(same_event(title, "密米尔的返演·下篇"))
 
+    def test_decorative_line_above_title(self):
+        # 实录 2026-10-22 08:56：「前进吧，王牌配送员！」上面还有一行装饰字「SAKURA」，只取最上一行会读成空
+        rows = [("SAKURA", 1180, 4), ("前进吧，王牌配送员！", 1150, 48), ("活动剧情", 1192, 90)]
+        self.assertEqual(event_title_on_map(boxes(rows), W, H), "前进吧，王牌配送员！")
+        self.assertIsNone(event_title_on_map(boxes([("SAKURA", 1180, 4), ("活动剧情", 1192, 90)]), W, H))
+
 
 try:
     import cv2
