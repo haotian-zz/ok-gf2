@@ -124,6 +124,7 @@ def _with_game_started(run):
         # 实录 2026-10-22：往期活动推图时挪了一下游戏窗口，游戏崩溃退出，脚本对着失效的窗口句柄一直空点。
         # 跑到一半游戏进程没了：重新拉起游戏、进主页，再从头跑一遍任务（推图类任务会自己找回进度）。
         for attempt in range(GAME_CRASH_RETRIES + 1):
+            self.crash_resume = attempt > 0  # 崩溃后重跑：任务可以沿用这次已经做完的进度
             try:
                 self.ensure_game_started()
                 return run(self, *args, **kwargs)

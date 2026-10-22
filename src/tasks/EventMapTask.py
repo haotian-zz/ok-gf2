@@ -169,7 +169,9 @@ class EventMapTask(ClearMapTask):
     # ------------------------------------------------------------------ 主流程
     def _run_sweep(self):
         self.event_name = None
-        self.skipped_events = []
+        if not getattr(self, "crash_resume", False):
+            # 游戏崩溃重跑时保留：已经推完/推不动的活动不用再进去核对一遍（95% 的活动每个要几分钟）
+            self.skipped_events = []
         if self.scan_maps():
             self.event_name = event_title_on_map(self.ocr(box="top") or [], self.width, self.height)
             self.log_info(f"停在活动「{self.event_name or '?'}」的地图上，先推这个", notify=True)

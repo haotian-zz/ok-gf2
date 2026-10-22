@@ -201,6 +201,7 @@ class GameCrashRecoveryTest(unittest.TestCase):
         task = self.make(alive, body)
         task.ensure_game_started.side_effect = lambda: alive.__setitem__(0, True)
         self.assertEqual("done", task.run())
+        self.assertTrue(task.crash_resume)
         self.assertEqual(2, len(calls))
         self.assertEqual(2, task.ensure_game_started.call_count)
 
@@ -208,6 +209,7 @@ class GameCrashRecoveryTest(unittest.TestCase):
         task = self.make([True], lambda t: (_ for _ in ()).throw(ValueError("识别失败")))
         with self.assertRaises(ValueError):
             task.run()
+        self.assertFalse(task.crash_resume)
         self.assertEqual(1, task.ensure_game_started.call_count)
 
     def test_user_stop_is_not_retried(self):
