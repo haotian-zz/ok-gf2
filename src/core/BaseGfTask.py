@@ -68,6 +68,9 @@ stamina_popup_re = re.compile(r"情报拼图补充|情报.{0,3}补充|体力不�
 # 点了是「终止码演算」文字页，底部「点击空白处继续」字很淡 OCR 读不到。剧情的跳过点不掉，要专门点
 story_exit_re = re.compile(r"^终止覆写$")
 story_blank_re = re.compile(r"^终止码演算$|点击空白处继续")
+# 加载页每看到一次，skip_dialogs 的超时至少顺延到这么多秒以后。要比一次取帧可能卡住的时间长：加载页画面不动，
+# WGC 不出新帧，next_frame 会卡 10 秒以上（实录 2026-10-22 两次「资源加载中」页 30 秒超时，顺延 5 秒等于没顺延）
+LOADING_EXTEND = 30
 # 弹窗说明里出现这些字样，说明当前页签会消耗抽卡资源，绝不能点确认
 # 第三页签是坍塌晶条（抽卡资源），绝不能用；第二页签「消耗接入密钥兑换」是正常的体力道具，
 # 所以禁用词里不能有「兑换」
@@ -563,7 +566,7 @@ class BaseGfTask(LineupMixin, RuntimeMixin, BaseTask):
                     # 游戏在打/在加载，不算卡住，喂一下看门狗
                     self._touch_progress()
                 if self._is_loading_frame(boxes):
-                    deadline = min(max(deadline, time.time() + 5), hard_deadline)
+                    deadline = min(max(deadline, time.time() + LOADING_EXTEND), hard_deadline)
                 if has_dialog and (self.find_boxes(boxes, match=map_re) or self.find_boxes(boxes, match=nav_tabs_re)):
                     # 实录 2026-10-20：选关页面右上角是货币和「+」，真实输入下乱点会弹出「物品详情」；
                     # 章节选择页右上角是「模拟作战」页签，乱点会跑进模拟作战。导航页上什么都别点
