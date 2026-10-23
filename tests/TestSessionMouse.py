@@ -72,7 +72,7 @@ class PureFunctionTest(unittest.TestCase):
             select_session_device({3}, {12: 1})  # 标记来自不是候选的设备
 
     def test_console_takes_lowest_of_received_physical_mice(self):
-        """本机桌面的真实鼠标都进控制台（实测 win4090：11 罗技接收器、12 键盘上的鼠标集合），收到几台都行。"""
+        """本机桌面的真实鼠标都进控制台（实测：11 无线鼠标接收器、12 键盘上的鼠标集合），收到几台都行。"""
         self.assertEqual(select_session_device({12, 11}, {11: 1, 12: 2}, KIND_CONSOLE), 11)
         with self.assertRaises(SessionMouseError):
             select_session_device(set(), {11: 1}, KIND_CONSOLE)
