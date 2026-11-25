@@ -126,6 +126,7 @@ class EnsureMainDeadlineBumpTest(unittest.TestCase):
             return True
 
         task.is_main.side_effect = is_main
+        task._download_progress.return_value = None
         task.sleep.side_effect = lambda s: None
         self.assertTrue(ensure_main(task, time_out=1, loading_grace=0))
         self.assertEqual(calls["n"], 3)
@@ -137,6 +138,7 @@ class EnsureMainDeadlineBumpTest(unittest.TestCase):
         task.is_main.return_value = False
         task.ocr.return_value = [box("别的页面")]
         task._is_loading_frame.return_value = False
+        task._download_progress.return_value = None
         task.sleep.side_effect = lambda s: time.sleep(s)
         with self.assertRaises(Exception):
             ensure_main(task, recheck_time=0.1, time_out=0.1, loading_grace=0)
