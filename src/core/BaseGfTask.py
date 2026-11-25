@@ -44,6 +44,12 @@ story_skip_re = re.compile(r"跳过")  # 剧情对话右上角的「跳过 / 全
 main_marks = ["整备室", "公共区", "活动层", re.compile("招募")]  # 主页右侧的入口文字  # 标题页底部的「点击开始」
 GAME_LAUNCH_MAIN_TIMEOUT = 150  # 秒：从拉起游戏到进入主页的上限（实机：启动到标题约 50 秒，再加公告弹窗）
 GAME_FRESH_SECONDS = 180  # 秒：游戏进程比这更新，就当成刚被框架拉起、还停在启动/标题页，要走一遍进主页
+# 游戏更新当天启动时，标题页前先下载资源「下载资源 [1.53GB/2.95GB]  35MB/S」
+# （实录 2026-11-24：2.95 GB 下了两分多钟，下到 2.24 GB 时回主页 150 秒超时，报「请从游戏主页进入」）
+download_re = re.compile(r"下载资源")
+download_amount_re = re.compile(r"(\d+(?:\.\d+)?)\s*([KMG])B?\s*/", re.I)  # 已下载量：「1.53GB/」「196.22M /」
+DOWNLOAD_STALL = 180  # 秒：下载进度这么久没变，就不再因为下载顺延回主页的超时
+DOWNLOAD_MAX_WAIT = 1800  # 秒：一次回主页里因为下载最多顺延这么久
 GAME_CRASH_RETRIES = 3  # 一次任务里游戏进程中途没了（崩溃/被关）时，重新拉起再从头跑的次数上限
 GAME_ALIVE_CHECK_INTERVAL = 10  # 秒：next_frame 里隔这么久查一次游戏进程还在不在
 
@@ -332,6 +338,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         """
         回到主页。画面是加载页（NOW LOADING / 移动中 / 资源加载中）的时间不算进 time_out，超时顺延，
         最多多等 loading_grace 秒（实录：离开活动层的「艾莫号 移动中…69%」加载页把 60 秒耗光，任务被判失败）。
+        游戏更新下载资源时，下载进度在涨就一直顺延，下完以后重新按 time_out 计时；
+        进度 DOWNLOAD_STALL 秒不动、或因为下载已经顺延了 DOWNLOAD_MAX_WAIT 秒，就不再顺延。
         """
         self.info_set("current_task", "go_to_main")
         self._init_retries = 0
@@ -339,6 +347,8 @@ class BaseGfTask(RuntimeMixin, BaseTask):
         hard_deadline = deadline + loading_grace
         extended = False
         self._deadline_bump = 0
+        download_since = None  # 第一次看到下载页的时间
+        download_amount, download_moved = None, 0.0  # 上次读到的已下载量、它最后一次变化的时间
         while True:
             if self.is_main(recheck_time=recheck_time, esc=esc):
                 return True
@@ -351,7 +361,20 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             loading = False
             if now < hard_deadline:
                 self.next_frame()
-                loading = self._is_loading_frame(self.ocr())
+                boxes = self.ocr()
+                loading = self._is_loading_frame(boxes)
+                amount = self._download_progress(boxes)
+                if amount is not None:
+                    if download_since is None:
+                        download_since = now
+                        self.log_info(f"游戏在下载资源（已下 {amount}），下载期间回主页的超时顺延", notify=False)
+                    if amount != download_amount:
+                        download_amount, download_moved = amount, now
+                    if now - download_moved < DOWNLOAD_STALL and now - download_since < DOWNLOAD_MAX_WAIT:
+                        # 下载的时间不算进超时：下完以后重新按 time_out 计时。进度不动了就不再顺延，按原超时报错
+                        loading = True
+                        deadline = max(deadline, now + time_out)
+                        hard_deadline = max(hard_deadline, deadline + loading_grace)
             if loading:
                 # 加载页的时间不算进回主页的超时：每看到一次加载页，至少再留 15 秒给加载完以后的返回操作。
                 # 实录 2026-11-08：从极限峰值部署界面回主页，退出作战用了 14 秒、接着加载 15 秒，加载刚结束就满 30 秒，
@@ -400,6 +423,17 @@ class BaseGfTask(RuntimeMixin, BaseTask):
             self.next_frame()
         if raise_if_not_found:
             raise Exception("跳过剧情超时!")
+
+    def _download_progress(self, boxes):
+        """
+        游戏更新时的下载页「下载资源 [1.53GB/2.95GB]」：返回已下载量（如 "1.53G"），读不出数字时返回 "下载资源"；
+        不是下载页返回 None。
+        """
+        names = [box.name for box in boxes or [] if box.name]
+        if not any(download_re.search(name) for name in names):
+            return None
+        m = download_amount_re.search(" ".join(names))
+        return f"{m.group(1)}{m.group(2).upper()}" if m else "下载资源"
 
     def _is_loading_frame(self, boxes):
         """
