@@ -51,6 +51,10 @@ class ChenyanDevice:
             return [SimpleNamespace(name="尘烟前线")] if self.entry else []
         return []
 
+    def wait_until(self, condition, **kwargs):
+        """Evaluate the polled condition once; the simulated page does not change while waiting."""
+        return condition()
+
     def click(self, target, **kwargs):
         """Record the clicked navigation target."""
         self.clicked.append(target)
