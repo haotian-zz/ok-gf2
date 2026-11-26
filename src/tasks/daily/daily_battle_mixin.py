@@ -549,5 +549,10 @@ class DailyBattleMixin:
         if not self.wait_click_ocr(match="确定", box=self.box.bottom_right, time_out=5):
             self.log_error("助战入队后未找到编队确定按钮，停止本次尘烟作战")
             return False
+        # 没坐满会弹「仍有可上阵的位置，是否依然开始作战」，和前哨战一样确认直接开战。
+        # 实录 2026-11-25：第二场时第一场用过的人「休息中」，编队只上了 2 人 + 助战，弹窗挡住，等「作战开始」120 秒超时
+        if self.wait_ocr(match=re.compile("仍有可上阵"), time_out=2):
+            self.log_info("尘烟攻坚战：阵容没坐满（有人休息中或位置空着），确认直接开战")
+            self.wait_click_ocr(match=re.compile("^确认$"), box=self.box.bottom, after_sleep=2, raise_if_not_found=True)
         self.auto_battle("开始作战", self.box.bottom_right)
         return True
