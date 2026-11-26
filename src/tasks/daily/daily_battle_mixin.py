@@ -245,7 +245,8 @@ class DailyBattleMixin:
                 self.info_set("尘烟前线", "已确认剩余 0 次")
                 break
             self.wait_click_ocr(match="攻坚战", box=self.box.top_right, after_sleep=0.5, raise_if_not_found=True)
-            self.wait_click_ocr(match="开始作战", box=self.box.bottom_right, after_sleep=2, raise_if_not_found=True)
+            if not self._chenyan_start_assault():
+                return failed("点了 3 次「开始作战」都还在尘烟页，没进编队界面")
             if not self.choose_chenyan(tickets):
                 return False
             self.sleep(2)
@@ -254,6 +255,26 @@ class DailyBattleMixin:
                 return failed("作战后未读取到剩余挑战次数")
         self.back(after_sleep=2)
         return True
+
+    def _chenyan_on_select_page(self):
+        """右上同时有「前哨战」「攻坚战」两个页签＝还在尘烟选战役页（编队界面没有这两个页签）。"""
+        names = {box.name for box in self.ocr(match=["前哨战", "攻坚战"], box=self.box.top_right) or []}
+        return {"前哨战", "攻坚战"} <= names
+
+    def _chenyan_start_assault(self):
+        """点「开始作战」并确认离开了尘烟页；点击没生效就再点，最多 3 次。
+
+        实录 2026-11-25：尘烟新赛季第一天，切到攻坚战后马上点「开始作战」没反应，
+        后面编队的固定位置点击全点在尘烟页上，等「助战」10 秒超时抛异常。
+        编队界面右下也有「开始作战」，所以只在确认还停在尘烟页（两个页签都在）时才补点。
+        """
+        for attempt in range(3):
+            self.wait_click_ocr(match="开始作战", box=self.box.bottom_right, after_sleep=2, raise_if_not_found=True)
+            if self.wait_until(lambda: not self._chenyan_on_select_page(), time_out=4, raise_if_not_found=False):
+                return True
+            self.log_info(f"尘烟：点了「开始作战」还在选战役页（第 {attempt + 1} 次），再点一次", notify=False)
+        self.screenshot("chenyan_start_not_opened")
+        return False
 
     def _select_chenyan_attribute(self, attr):
         """切换助战属性，OCR 漏读时在确认列表后使用比例坐标。"""
