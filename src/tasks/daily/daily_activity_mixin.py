@@ -14,6 +14,7 @@ from src.tasks.daily.daily_common_mixin import (
 )
 
 activity_time_re = re.compile(r"^(\d+)\s*(?:天|days?)\s*(\d+)\s*(?:小时|hours?)", re.I)
+activity_stage_locked_re = re.compile("需要完成前置关卡")
 
 
 class DailyActivityMixin:
@@ -621,6 +622,7 @@ class DailyActivityMixin:
     def activity(self):
         activity_wuzi_names = [name.strip() for name in str(self.config.get("当前物资关卡名称")).split("-")]
         self.info_set("current_task", "activity")
+        locked = False
         if to_activity_page := self.wait_click_ocr(
             match=["限时开启"], box=self.box.top_right, after_sleep=2, raise_if_not_found=False, time_out=4
         ):
@@ -681,10 +683,34 @@ class DailyActivityMixin:
                         battles = self.wait_ocr(match=map_re, time_out=4)
                         if battles:
                             self.click(battles[-1])
+                            if self._activity_stage_locked(battles[-1]):
+                                locked = True
+                                continue
                             self.fast_combat(set_cost=1, battle_max=6, activity=True)
             else:
                 self.log_info("找不到开启的活动")
         self.ensure_main()
+        return "待核查" if locked else None
+
+    def _activity_stage_locked(self, stage):
+        """关卡面板写着「需要完成前置关卡」、没有「自律」：这期活动还没手动打过，自律用不了。
+
+        实录 2026-11-25：新一期活动完成度 0%，物资模式点最后一关，面板右下只有「需要完成前置关卡」，
+        原来等「自律」超时抛 WaitFailedException，一键日常记成异常。
+        没认出任何一个时返回 False，照旧交给 fast_combat（它等不到「自律」会报错）。
+        """
+        boxes = self.wait_ocr(
+            match=["自律", activity_stage_locked_re], box=self.box.right, time_out=6, raise_if_not_found=False
+        )
+        names = [box.name for box in boxes or []]
+        if "自律" in names or not any(activity_stage_locked_re.search(name) for name in names):
+            return False
+        self.log_info(
+            f"活动关卡 {stage.name} 要先完成前置关卡（这期活动还没手动打过），自律用不了，先跳过", notify=True
+        )
+        self.info_set("活动自律", "待核查：活动关卡还没通关，要先手动打一遍")
+        self.screenshot("activity_stage_locked")
+        return True
 
     def find_activities(self):
         return self.wait_ocr(match=[activity_time_re], box=self.box.bottom_left, raise_if_not_found=False, time_out=4)
